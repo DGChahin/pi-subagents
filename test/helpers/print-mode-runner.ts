@@ -516,9 +516,9 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 }
 
 /**
- * Extract the text of every `Agent` tool result in a session's history. This is
- * the real end-to-end observable: for a foreground spawn it contains the child's
- * own output; for a background spawn it's the "started in background" envelope.
+ * Extract the text of every `Agent` tool result in a session's history. A
+ * top-level spawn returns the immediate background dispatch envelope; full
+ * child output stays in manager state until get_subagent_result retrieves it.
  */
 export function agentToolResults(session: AgentSession): string[] {
   const out: string[] = [];
@@ -536,8 +536,8 @@ export function agentToolResults(session: AgentSession): string[] {
 /**
  * All text across the whole conversation — assistant turns, user/nudge messages,
  * and every tool result. Use this to assert a child's output *materialized
- * somewhere* (a foreground tool result, a get_subagent_result result, a held
- * nudge), rather than only in the parent's final message which may summarize it.
+ * somewhere* (a get_subagent_result result or a held callback), rather than
+ * only in the parent's final message which may summarize it.
  */
 export function conversationText(session: AgentSession): string {
   const parts: string[] = [];

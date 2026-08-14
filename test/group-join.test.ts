@@ -1,17 +1,9 @@
-/**
- * group-join.test.ts — Behavior of GroupJoinManager's state machine and timers.
- *
- * Uses fake timers to assert deterministic timeout behavior without flakiness.
- * The class itself is exercised directly with real records — no mocks beyond
- * a spy on the delivery callback.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GroupJoinManager } from "../src/group-join.js";
+import { GroupJoinManager, type AgentRunCompletion } from "../src/group-join.js";
 import type { AgentRecord } from "../src/types.js";
 
-function makeRecord(id: string, overrides: Partial<AgentRecord> = {}): AgentRecord {
-  return {
+function makeCompletion(id: string, overrides: Partial<AgentRecord> = {}): AgentRunCompletion {
+  const record: AgentRecord = {
     id,
     type: "general-purpose",
     description: "test",
@@ -19,135 +11,95 @@ function makeRecord(id: string, overrides: Partial<AgentRecord> = {}): AgentReco
     toolUses: 0,
     startedAt: 0,
     lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+    compactionCount: 0,
+    runRevision: 1,
+    settledRevision: 1,
+    pendingDeliveryRevision: 1,
     ...overrides,
   };
+  return { record, revision: record.runRevision };
 }
+
+const ids = (runs: readonly AgentRunCompletion[]) => runs.map(({ record }) => record.id);
 
 describe("GroupJoinManager", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("returns 'pass' for unregistered agents and never invokes the callback", () => {
+  it("passes an unregistered run through", () => {
     const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver);
-    expect(mgr.onAgentComplete(makeRecord("a"))).toBe("pass");
-    expect(deliver).not.toHaveBeenCalled();
-    expect(mgr.isGrouped("a")).toBe(false);
-  });
+    const manager = new GroupJoinManager(deliver);
 
-  it("holds the first completion and arms the join timeout", () => {
-    const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver, 30_000);
-    mgr.registerGroup("g", ["a", "b"]);
-
-    expect(mgr.isGrouped("a")).toBe(true);
-    expect(mgr.onAgentComplete(makeRecord("a"))).toBe("held");
-
-    vi.advanceTimersByTime(29_999);
+    expect(manager.onAgentComplete(makeCompletion("a"))).toBe("pass");
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("delivers all records (partial=false) when the final completion arrives in time", () => {
+  it("holds exact revisions and delivers the full group once", () => {
     const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver);
-    mgr.registerGroup("g", ["a", "b"]);
+    const manager = new GroupJoinManager(deliver);
+    const a = makeCompletion("a", { result: "A" });
+    const b = makeCompletion("b", { result: "B" });
+    manager.registerGroup("g", [a, b]);
 
-    mgr.onAgentComplete(makeRecord("a", { result: "A" }));
-    expect(mgr.onAgentComplete(makeRecord("b", { result: "B" }))).toBe("delivered");
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const [records, partial] = deliver.mock.calls[0];
-    expect(records.map((r: AgentRecord) => r.id).sort()).toEqual(["a", "b"]);
-    expect(partial).toBe(false);
-
-    // Group is cleaned up — no future deliveries can fire from these ids
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(false);
+    expect(manager.onAgentComplete(a)).toBe("held");
+    expect(manager.onAgentComplete(b)).toBe("delivered");
+    expect(ids(deliver.mock.calls[0][0]).sort()).toEqual(["a", "b"]);
+    expect(deliver.mock.calls[0][1]).toBe(false);
+    expect(manager.onAgentComplete(a)).toBe("pass");
+    expect(deliver).toHaveBeenCalledOnce();
   });
 
-  it("delivers partial=true on timeout and re-arms the group for stragglers", () => {
+  it("delivers a timed-out partial group and uses the shorter straggler timeout", () => {
     const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver, 30_000);
-    mgr.registerGroup("g", ["a", "b", "c"]);
+    const manager = new GroupJoinManager(deliver, 30_000);
+    const a = makeCompletion("a");
+    const b = makeCompletion("b");
+    const c = makeCompletion("c");
+    manager.registerGroup("g", [a, b, c]);
 
-    mgr.onAgentComplete(makeRecord("a"));
+    manager.onAgentComplete(a);
     vi.advanceTimersByTime(30_000);
+    expect(ids(deliver.mock.calls[0][0])).toEqual(["a"]);
+    expect(deliver.mock.calls[0][1]).toBe(true);
 
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const [records, partial] = deliver.mock.calls[0];
-    expect(records.map((r: AgentRecord) => r.id)).toEqual(["a"]);
-    expect(partial).toBe(true);
-
-    // 'a' was delivered and is dropped from the group; 'b' and 'c' remain as stragglers
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(true);
-    expect(mgr.isGrouped("c")).toBe(true);
-  });
-
-  it("uses the shorter straggler timeout (15s) regardless of the configured group timeout", () => {
-    const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver, 30_000);
-    mgr.registerGroup("g", ["a", "b", "c"]);
-
-    // First batch: 'a' alone, partial-delivered after 30s
-    mgr.onAgentComplete(makeRecord("a"));
-    vi.advanceTimersByTime(30_000);
-    expect(deliver).toHaveBeenCalledTimes(1);
-
-    // Straggler 'b' arrives — fires at 15s, not 30s
-    mgr.onAgentComplete(makeRecord("b"));
+    manager.onAgentComplete(b);
     vi.advanceTimersByTime(14_999);
     expect(deliver).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
-    expect(deliver).toHaveBeenCalledTimes(2);
-
-    expect(deliver.mock.calls[1][0].map((r: AgentRecord) => r.id)).toEqual(["b"]);
+    expect(ids(deliver.mock.calls[1][0])).toEqual(["b"]);
     expect(deliver.mock.calls[1][1]).toBe(true);
-    expect(mgr.isGrouped("c")).toBe(true); // 'c' is the remaining straggler now
+    expect(manager.isGrouped("c")).toBe(true);
   });
 
-  it("delivers stragglers as a complete batch (partial=false) when all complete before their timeout", () => {
+  it("rejects stale revisions and consumes only the registered run", () => {
     const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver, 30_000);
-    mgr.registerGroup("g", ["a", "b", "c"]);
+    const manager = new GroupJoinManager(deliver);
+    const a = makeCompletion("a");
+    const b = makeCompletion("b");
+    manager.registerGroup("g", [a, b]);
 
-    mgr.onAgentComplete(makeRecord("a"));
-    vi.advanceTimersByTime(30_000); // partial: 'a'
-    expect(deliver).toHaveBeenCalledTimes(1);
+    const stale = { record: a.record, revision: 0 };
+    expect(manager.onAgentComplete(stale)).toBe("pass");
+    expect(manager.consume("a", 0)).toBe(false);
+    expect(manager.consume("a", 1)).toBe(true);
 
-    mgr.onAgentComplete(makeRecord("b"));
-    expect(mgr.onAgentComplete(makeRecord("c"))).toBe("delivered");
-
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls[1][0].map((r: AgentRecord) => r.id).sort()).toEqual(["b", "c"]);
-    expect(deliver.mock.calls[1][1]).toBe(false);
+    expect(manager.onAgentComplete(b)).toBe("delivered");
+    expect(ids(deliver.mock.calls[0][0])).toEqual(["b"]);
   });
 
-  it("returns 'pass' for late completions arriving after a group is already delivered", () => {
+  it("dispose clears held runs and timers", () => {
     const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver);
-    mgr.registerGroup("g", ["a", "b"]);
+    const manager = new GroupJoinManager(deliver, 30_000);
+    const a = makeCompletion("a");
+    const b = makeCompletion("b");
+    manager.registerGroup("g", [a, b]);
+    manager.onAgentComplete(a);
 
-    mgr.onAgentComplete(makeRecord("a"));
-    mgr.onAgentComplete(makeRecord("b")); // full delivery
-    expect(deliver).toHaveBeenCalledTimes(1);
-
-    // A duplicate/late completion must not trigger a second delivery
-    expect(mgr.onAgentComplete(makeRecord("a"))).toBe("pass");
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("dispose() clears pending timers so a partial delivery never fires post-dispose", () => {
-    const deliver = vi.fn();
-    const mgr = new GroupJoinManager(deliver, 30_000);
-    mgr.registerGroup("g", ["a", "b"]);
-
-    mgr.onAgentComplete(makeRecord("a")); // arms 30s timeout
-    mgr.dispose();
-
+    manager.dispose();
     vi.advanceTimersByTime(60_000);
+
     expect(deliver).not.toHaveBeenCalled();
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(false);
+    expect(manager.isGrouped("a")).toBe(false);
+    expect(manager.isGrouped("b")).toBe(false);
   });
 });

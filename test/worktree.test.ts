@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupWorktree, createWorktree, pruneWorktrees } from "../src/worktree.js";
+import { checkpointWorktree, cleanupWorktree, createWorktree, pruneWorktrees } from "../src/worktree.js";
 
 /**
  * Helper: create a temporary git repo with an initial commit.
@@ -99,6 +99,48 @@ describe("worktree", () => {
       // Cleanup
       try { execFileSync("git", ["worktree", "remove", "--force", wt1!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
       try { execFileSync("git", ["worktree", "remove", "--force", wt2!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+    });
+  });
+
+  describe("checkpointWorktree", () => {
+    it("checkpoints repeated turns on one retained worktree and branch", () => {
+      const wt = createWorktree(repoDir, "resumable-1")!;
+      writeFileSync(join(wt.path, "first.txt"), "first turn");
+
+      const first = checkpointWorktree(wt, "first turn");
+      expect(first).toEqual(expect.objectContaining({
+        status: "checkpointed",
+        branch: "pi-agent-resumable-1",
+        path: wt.path,
+      }));
+      expect(existsSync(wt.path)).toBe(true);
+
+      writeFileSync(join(wt.path, "second.txt"), "resumed turn");
+      const second = checkpointWorktree(wt, "resumed turn");
+      expect(second).toEqual(expect.objectContaining({
+        status: "checkpointed",
+        branch: first.status === "checkpointed" ? first.branch : undefined,
+        path: wt.path,
+      }));
+      expect(existsSync(wt.path)).toBe(true);
+
+      const final = cleanupWorktree(repoDir, wt, "final cleanup");
+      expect(final.status).toBe("checkpointed");
+      expect(existsSync(wt.path)).toBe(false);
+      if (final.status === "checkpointed") {
+        execFileSync("git", ["branch", "-D", final.branch], { cwd: repoDir, stdio: "pipe" });
+      }
+    });
+
+    it("reports a missing retained path instead of hiding checkpoint loss", () => {
+      const wt = createWorktree(repoDir, "gone-1")!;
+      rmSync(wt.path, { recursive: true, force: true });
+
+      expect(checkpointWorktree(wt, "missing worktree")).toEqual({
+        status: "failed",
+        path: wt.path,
+        error: "Worktree path does not exist.",
+      });
     });
   });
 
@@ -214,13 +256,23 @@ describe("worktree", () => {
       try { execFileSync("git", ["branch", "-D", result2.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
     });
 
-    it("handles already-deleted worktree gracefully", () => {
-      const wt = createWorktree(repoDir, "gone-1")!;
-      // Manually delete the worktree directory
-      rmSync(wt.path, { recursive: true, force: true });
+    it("retains recovery details when the final removal fails", () => {
+      const wt = createWorktree(repoDir, "remove-failure-1")!;
+      writeFileSync(join(wt.path, "change.txt"), "recover me");
 
-      const result = cleanupWorktree(repoDir, wt, "already gone");
-      expect(result.hasChanges).toBe(false);
+      const result = cleanupWorktree(join(repoDir, "missing-base"), wt, "failed removal");
+
+      expect(result.status).toBe("failed");
+      expect(result.path).toBe(wt.path);
+      expect(result.error).toContain("Worktree removal failed");
+      expect(existsSync(wt.path)).toBe(true);
+
+      const recovered = cleanupWorktree(repoDir, wt, "recovered removal");
+      expect(recovered.status).toBe("checkpointed");
+      expect(existsSync(wt.path)).toBe(false);
+      if (recovered.status === "checkpointed") {
+        execFileSync("git", ["branch", "-D", recovered.branch], { cwd: repoDir, stdio: "pipe" });
+      }
     });
 
     it("truncates commit message at 200 chars", () => {
