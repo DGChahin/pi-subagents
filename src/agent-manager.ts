@@ -20,6 +20,7 @@ import { cleanupWorktree, createWorktree, pruneWorktrees, } from "./worktree.js"
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
+export type CaptureParentGeneration = () => number;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
 /** Default max concurrent background agents. */
@@ -131,6 +132,7 @@ export class AgentManager {
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
+  private captureParentGeneration?: CaptureParentGeneration;
   private maxConcurrent: number;
   /** Base repos worktrees were created from — so dispose() can prune them all,
    *  not just the parent repo (caller-supplied cwd can target other repos). */
@@ -146,10 +148,12 @@ export class AgentManager {
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
+    captureParentGeneration?: CaptureParentGeneration,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onCompact = onCompact;
+    this.captureParentGeneration = captureParentGeneration;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
@@ -206,6 +210,11 @@ export class AgentManager {
       parentAgentId: options.parentAgentId,
       maxSubagentDepth: options.maxSubagentDepth,
       rootSessionId: options.rootSessionId,
+      // Capture before the queue decision. A queued top-level run belongs to
+      // the parent session that dispatched it, not the session active when it starts.
+      parentSessionGeneration: options.parentAgentId === undefined
+        ? this.captureParentGeneration?.()
+        : undefined,
     };
     this.agents.set(id, record);
 
@@ -570,6 +579,9 @@ export class AgentManager {
     if (record.status === "running" || record.status === "queued") return undefined;
 
     record.abortController = new AbortController();
+    // Resume reuses the record, so replace the prior run's identity at dispatch
+    // time. Queue start must preserve this value.
+    record.parentSessionGeneration = this.captureParentGeneration?.();
     this.prepareResume(record, "queued");
     if (this.runningBackground >= this.maxConcurrent) {
       this.queue.push({ kind: "resume", id, prompt });

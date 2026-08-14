@@ -137,6 +137,11 @@ export interface AgentRecord {
   depth?: number;
   /** Parent agent ID for ownership-scoped nested controls. */
   parentAgentId?: string;
+  /**
+   * Parent session generation captured when a top-level spawn or background
+   * resume is dispatched. Queue start does not change this identity.
+   */
+  parentSessionGeneration?: number;
   /** Effective inherited nesting cap for this branch. */
   maxSubagentDepth?: number;
   /**

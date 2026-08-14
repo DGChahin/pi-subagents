@@ -264,10 +264,13 @@ export default function (pi: ExtensionAPI) {
   // Holds notifications briefly so get_subagent_result can cancel them before
   // delivery. A claimed compaction barrier keeps them out of Pi's pending queue.
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
-  const heldCompletions = new Map<string, { record: AgentRecord; partial: boolean; generation: number }>();
-  const agentGenerations = new Map<string, number>();
+  interface HeldCompletion {
+    readonly record: AgentRecord;
+    readonly partial: boolean;
+    readonly generation: number;
+  }
+  const heldCompletions = new Map<string, HeldCompletion>();
   const NUDGE_HOLD_MS = 200;
-  const MAX_COMPLETIONS_PER_CALLBACK = 20;
   // A queued result wait must observe completion before its held notification
   // can fire, so successful waits can still suppress that redundant nudge.
   const QUEUE_WAIT_POLL_MS = Math.floor(NUDGE_HOLD_MS / 4);
@@ -336,7 +339,6 @@ export default function (pi: ExtensionAPI) {
     deliveryInProgress = true;
     try {
       const pending = [...heldCompletions.values()];
-      const batch = pending.slice(0, MAX_COMPLETIONS_PER_CALLBACK);
       const payload: BeforeContinuationPayload = {
         hold: false,
         willRestartParent: true,
@@ -344,6 +346,7 @@ export default function (pi: ExtensionAPI) {
       pi.events.emit("context-compact:before-continuation", payload);
       if (
         payload.hold
+        && payload.claimedBy === "context-compact"
         && Number.isInteger(payload.barrierId)
         && typeof payload.sessionId === "string"
         && Number.isInteger(payload.generation)
@@ -360,27 +363,23 @@ export default function (pi: ExtensionAPI) {
       // while this is still the same idle parent session.
       if (generation !== sessionGeneration || currentCtx !== ctx || !ctx.isIdle()) return;
 
-      const records = batch.map(({ record }) => record).filter(record => !record.resultConsumed);
+      const records = pending.map(({ record }) => record).filter(record => !record.resultConsumed);
       if (records.length === 0) return;
 
       const notifications = records.map(formatTaskNotification).join("\n\n");
       const partial = pending.some(completion => completion.partial);
-      const omitted = pending.length - records.length;
       const [first, ...rest] = records;
       const details = buildNotificationDetails(first, 160, agentActivity.get(first.id));
       if (rest.length > 0) {
         details.others = rest.map(record => buildNotificationDetails(record, 160, agentActivity.get(record.id)));
       }
       const label = partial
-        ? `${pending.length} agent(s) finished; other grouped agents are still running`
-        : `${pending.length} agent(s) finished`;
-      const overflowNote = omitted > 0
-        ? `\n\n${omitted} additional completion(s) are stored. Use get_subagent_result with their agent IDs.`
-        : "";
+        ? `${records.length} agent(s) finished; other grouped agents are still running`
+        : `${records.length} agent(s) finished`;
 
       pi.sendMessage<NotificationDetails>({
         customType: "subagent-notification",
-        content: `Background agent completion: ${label}\n\n${notifications}${overflowNote}`,
+        content: `Background agent completion: ${label}\n\n${notifications}`,
         display: true,
         details,
       }, { deliverAs: "followUp", triggerTurn: true });
@@ -390,10 +389,11 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function queueCompletionDelivery(records: AgentRecord[], partial: boolean, generation: number): void {
-    if (generation !== sessionGeneration) return;
-    for (const record of records) {
-      if (!record.resultConsumed) heldCompletions.set(record.id, { record, partial, generation });
+  function queueCompletionDelivery(completions: readonly HeldCompletion[]): void {
+    for (const completion of completions) {
+      if (completion.generation === sessionGeneration && !completion.record.resultConsumed) {
+        heldCompletions.set(completion.record.id, completion);
+      }
     }
     attemptCompletionDelivery();
   }
@@ -421,27 +421,29 @@ export default function (pi: ExtensionAPI) {
   });
 
   function sendIndividualNudge(record: AgentRecord) {
-    const generation = agentGenerations.get(record.id) ?? sessionGeneration;
-    agentGenerations.delete(record.id);
+    const generation = record.parentSessionGeneration ?? sessionGeneration;
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
     fleet.onAgentFinished(record.id);
-    scheduleNudge(record.id, () => queueCompletionDelivery([record], false, generation));
+    scheduleNudge(record.id, () => queueCompletionDelivery([{ record, partial: false, generation }]));
     widget.update();
   }
 
   // ---- Group join manager ----
   const groupJoin = new GroupJoinManager(
     (records, partial) => {
-      const generation = agentGenerations.get(records[0]?.id ?? "") ?? sessionGeneration;
+      const completions = records.map(record => ({
+        record,
+        partial,
+        generation: record.parentSessionGeneration ?? sessionGeneration,
+      }));
       for (const record of records) {
-        agentGenerations.delete(record.id);
         agentActivity.delete(record.id);
         widget.markFinished(record.id);
         fleet.onAgentFinished(record.id);
       }
       const groupKey = `group:${records.map(record => record.id).join(",")}`;
-      scheduleNudge(groupKey, () => queueCompletionDelivery(records, partial, generation));
+      scheduleNudge(groupKey, () => queueCompletionDelivery(completions));
       widget.update();
     },
     30_000,
@@ -497,7 +499,6 @@ export default function (pi: ExtensionAPI) {
 
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
-      agentGenerations.delete(record.id);
       agentActivity.delete(record.id);
       widget.markFinished(record.id);
       fleet.onAgentFinished(record.id);
@@ -523,7 +524,9 @@ export default function (pi: ExtensionAPI) {
 
   const manager = new AgentManager(handleAgentComplete, undefined, (record) => {
     if (record.parentAgentId) return;
-    agentGenerations.set(record.id, sessionGeneration);
+    // This fallback supports records created without a generation capture hook.
+    // Queue start must not overwrite the dispatch identity already on the record.
+    record.parentSessionGeneration ??= sessionGeneration;
     // Emit started event when agent transitions to running (including from queue)
     pi.events.emit("subagents:started", {
       id: record.id,
@@ -541,7 +544,7 @@ export default function (pi: ExtensionAPI) {
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
     });
-  });
+  }, () => sessionGeneration);
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -658,6 +661,9 @@ export default function (pi: ExtensionAPI) {
     scheduler.stop();
   });
 
+  // Settlement contract: a synchronous completion producer claims
+  // `before-continuation` in its settlement handler. Keep this call synchronous;
+  // any future async settlement path must claim before its first await.
   pi.on("agent_settled", () => {
     attemptCompletionDelivery();
   });
@@ -679,7 +685,6 @@ export default function (pi: ExtensionAPI) {
     scheduler.stop();
     manager.abortAll();
     clearPendingCompletionDelivery();
-    agentGenerations.clear();
     unsubscribeBarrierOpen();
     fleet.dispose();
     manager.dispose();
