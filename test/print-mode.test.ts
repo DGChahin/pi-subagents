@@ -46,6 +46,7 @@ function makePi() {
 function makeHeadlessCtx() {
   return {
     hasUI: false,
+    isIdle: () => true,
     ui: {
       setStatus: vi.fn(),
       setWidget: vi.fn(),
@@ -80,6 +81,8 @@ describe("print mode background notifications", () => {
 
     const { pi, tools, handlers } = makePi();
     subagentsExtension(pi);
+    const context = makeHeadlessCtx();
+    await handlers.get("session_start")?.({}, context);
     vi.useFakeTimers();
 
     const agentTool = tools.get("Agent");
@@ -93,7 +96,7 @@ describe("print mode background notifications", () => {
       },
       undefined,
       undefined,
-      makeHeadlessCtx(),
+      context,
     );
 
     await vi.advanceTimersByTimeAsync(100); // smart-join batch debounce
@@ -101,6 +104,6 @@ describe("print mode background notifications", () => {
 
     expect(pi.sendMessage).toHaveBeenCalled();
 
-    await handlers.get("session_shutdown")?.({}, makeHeadlessCtx());
+    await handlers.get("session_shutdown")?.({}, context);
   });
 });

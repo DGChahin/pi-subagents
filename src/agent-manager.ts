@@ -13,13 +13,22 @@ import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
+import { streamToOutputFile } from "./output-file.js";
 import type { AgentInvocation, AgentRecord, IsolationMode, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage } from "./usage.js";
-import { cleanupWorktree, createWorktree, pruneWorktrees, } from "./worktree.js";
+import {
+  checkpointWorktree,
+  cleanupWorktree,
+  createWorktree,
+  pruneWorktrees,
+  type WorktreeCleanupResult,
+  type WorktreeInfo,
+} from "./worktree.js";
 
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
+export type CaptureParentGeneration = () => number;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
 /** Default max concurrent background agents. */
@@ -60,6 +69,14 @@ function occupiesPoolSlot(record: Pick<AgentRecord, "isBackground" | "parentAgen
   return !!record.isBackground && record.parentAgentId === undefined;
 }
 
+function worktreeCheckpointFailure(path: string, err: unknown): WorktreeCleanupResult {
+  return {
+    status: "failed",
+    path,
+    error: err instanceof Error ? err.message : String(err),
+  };
+}
+
 interface SpawnArgs {
   pi: ExtensionAPI;
   ctx: ExtensionContext;
@@ -67,6 +84,10 @@ interface SpawnArgs {
   prompt: string;
   options: SpawnOptions;
 }
+
+type QueueEntry =
+  | { kind: "spawn"; id: string; args: SpawnArgs }
+  | { kind: "resume"; id: string; prompt: string; revision: number };
 
 interface SpawnOptions {
   description: string;
@@ -127,13 +148,14 @@ export class AgentManager {
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
+  private captureParentGeneration?: CaptureParentGeneration;
   private maxConcurrent: number;
   /** Base repos worktrees were created from — so dispose() can prune them all,
    *  not just the parent repo (caller-supplied cwd can target other repos). */
   private worktreeRepos = new Set<string>();
 
-  /** Queue of background agents waiting to start. */
-  private queue: { id: string; args: SpawnArgs }[] = [];
+  /** Queue of background agents and resumed turns waiting to start. */
+  private queue: QueueEntry[] = [];
   /** Number of currently running background agents. */
   private runningBackground = 0;
 
@@ -142,10 +164,12 @@ export class AgentManager {
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
+    captureParentGeneration?: CaptureParentGeneration,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onCompact = onCompact;
+    this.captureParentGeneration = captureParentGeneration;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
@@ -191,6 +215,7 @@ export class AgentManager {
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
       compactionCount: 0,
+      runRevision: 1,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
       // declared it (e.g. a cross-extension RPC spawn). The widget's background-
@@ -200,8 +225,16 @@ export class AgentManager {
       invocation: options.invocation,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
+      parentRunRevision: options.parentAgentId === undefined
+        ? undefined
+        : this.agents.get(options.parentAgentId)?.runRevision,
       maxSubagentDepth: options.maxSubagentDepth,
       rootSessionId: options.rootSessionId,
+      // Capture before the queue decision. A queued top-level run belongs to
+      // the parent session that dispatched it, not the session active when it starts.
+      parentSessionGeneration: options.parentAgentId === undefined
+        ? this.captureParentGeneration?.()
+        : undefined,
     };
     this.agents.set(id, record);
 
@@ -209,7 +242,7 @@ export class AgentManager {
 
     if (occupiesPoolSlot(record) && !options.bypassQueue && this.runningBackground >= this.maxConcurrent) {
       // Queue it — will be started when a running agent completes
-      this.queue.push({ id, args });
+      this.queue.push({ kind: "spawn", id, args });
       return id;
     }
 
@@ -230,8 +263,8 @@ export class AgentManager {
     // spawn()'s check, and the directory may be gone by then (TOCTOU). Same
     // curated errors; drainQueue parks a throw on the record as an error.
     assertValidSpawnCwd(options.cwd);
-    // Single resolution point for the caller-supplied cwd — the worktree base
-    // repo and both cleanup calls below MUST agree on this value forever.
+    // Single resolution point for the caller-supplied cwd. Retained worktree
+    // checkpoint and definitive cleanup must keep this base repo identity.
     const customCwd = options.cwd ?? undefined; // null (RPC "unset") → undefined
     const baseCwd = customCwd ?? ctx.cwd;
 
@@ -248,6 +281,9 @@ export class AgentManager {
         );
       }
       record.worktree = wt;
+      record.worktreeRevision = record.runRevision;
+      record.worktreeBaseCwd = baseCwd;
+      record.worktreeHasCustomCwd = customCwd !== undefined;
       // workPath preserves subdirectory scoping for caller-supplied cwds: a
       // cwd deep in a monorepo maps to the same subdir inside the copy, not
       // the copied repo's root. Plain worktree spawns keep the historical
@@ -271,6 +307,8 @@ export class AgentManager {
       detachParentSignal = () => options.signal!.removeEventListener("abort", onParentAbort);
     }
     const detach = () => { detachParentSignal?.(); detachParentSignal = undefined; };
+    const runRevision = record.runRevision;
+    const revisionWorktree = record.worktree;
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
@@ -289,16 +327,23 @@ export class AgentManager {
       configCwd: options.configCwd ?? (customCwd !== undefined ? ctx.cwd : undefined),
       signal: record.abortController!.signal,
       onToolActivity: (activity) => {
+        if (record.runRevision !== runRevision) return;
         if (activity.type === "end") record.toolUses++;
         options.onToolActivity?.(activity);
       },
-      onTurnEnd: options.onTurnEnd,
-      onTextDelta: options.onTextDelta,
+      onTurnEnd: (turnCount) => {
+        if (record.runRevision === runRevision) options.onTurnEnd?.(turnCount);
+      },
+      onTextDelta: (delta, fullText) => {
+        if (record.runRevision === runRevision) options.onTextDelta?.(delta, fullText);
+      },
       onAssistantUsage: (usage) => {
+        if (record.runRevision !== runRevision) return;
         addUsage(record.lifetimeUsage, usage);
         options.onAssistantUsage?.(usage);
       },
       onCompaction: (info) => {
+        if (record.runRevision !== runRevision) return;
         record.compactionCount++;
         this.onCompact?.(record, info);
         options.onCompaction?.(info);
@@ -321,100 +366,59 @@ export class AgentManager {
         options.onSessionCreated?.(session);
       },
     })
-      .then(({ responseText, session, aborted, steered, failure }) => {
-        // Don't overwrite status if externally stopped via abort()
-        if (record.status !== "stopped") {
-          // Precedence: a hard abort keeps "aborted"; then a failed final turn
-          // (provider error that pi resolved instead of rejecting, #144) is an
-          // honest "error" — not a completion with an empty or stale result.
-          if (aborted) {
-            record.status = "aborted";
-          } else if (failure) {
-            record.status = "error";
-            record.error = failure;
-          } else {
-            record.status = steered ? "steered" : "completed";
+      .then(async ({ responseText, session, aborted, steered, failure }) => {
+        const isCurrent = record.runRevision === runRevision;
+        if (isCurrent) {
+          // Don't overwrite status if externally stopped via abort().
+          if (record.status !== "stopped") {
+            if (aborted) {
+              record.status = "aborted";
+            } else if (failure) {
+              record.status = "error";
+              record.error = failure;
+            } else {
+              record.status = steered ? "steered" : "completed";
+            }
           }
+          record.result = responseText;
+          record.session = session;
+          record.completedAt ??= Date.now();
         }
-        record.result = responseText;
-        record.session = session;
-        record.completedAt ??= Date.now();
 
         detach();
+        const wtResult = await this.settleRevisionArtifacts(record, runRevision, revisionWorktree);
+        if (record.runRevision !== runRevision) return responseText;
 
-        // Final flush of streaming output file
-        if (record.outputCleanup) {
-          try { record.outputCleanup(); } catch { /* ignore */ }
-          record.outputCleanup = undefined;
-        }
-
-        // Clean up worktree if used
-        if (record.worktree) {
-          const wtResult = cleanupWorktree(baseCwd, record.worktree, options.description);
-          record.worktreeResult = wtResult;
-          if (wtResult.hasChanges && wtResult.branch) {
-            // With a caller-supplied cwd the branch lives in THAT repo, not the
-            // parent session's — say so, or the orchestrator merges in the wrong repo.
-            const repoNote = customCwd !== undefined ? ` in \`${baseCwd}\`` : "";
-            record.result = (record.result ?? "") +
-              `\n\n---\nChanges saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git merge ${wtResult.branch}\`${customCwd !== undefined ? ` (run in \`${baseCwd}\`)` : ""}`;
-          }
-        }
-
-        this.abortOwnedChildren(id);
-
-        // Fire onComplete for foreground agents too — lifecycle symmetry.
-        // Mark resultConsumed so the callback skips notifications (result returned inline).
-        if (!options.isBackground) {
-          record.resultConsumed = true;
-          try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
-        } else {
-          if (occupiesPoolSlot(record)) this.runningBackground--;
-          try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
-          this.drainQueue();
-        }
+        this.applyWorktreeResult(record, wtResult, baseCwd, customCwd !== undefined);
         return responseText;
-      })
-      .catch((err) => {
-        // Don't overwrite status if externally stopped via abort()
-        if (record.status !== "stopped") {
-          record.status = "error";
+      }, async (err) => {
+        const isCurrent = record.runRevision === runRevision;
+        if (isCurrent) {
+          if (record.status !== "stopped") record.status = "error";
+          record.error = err instanceof Error ? err.message : String(err);
+          record.completedAt ??= Date.now();
         }
-        record.error = err instanceof Error ? err.message : String(err);
-        record.completedAt ??= Date.now();
 
         detach();
+        const wtResult = await this.settleRevisionArtifacts(record, runRevision, revisionWorktree);
+        if (record.runRevision !== runRevision) return "";
 
-        // Final flush of streaming output file on error
-        if (record.outputCleanup) {
-          try { record.outputCleanup(); } catch { /* ignore */ }
-          record.outputCleanup = undefined;
-        }
-
-        // Best-effort worktree cleanup on error
-        if (record.worktree) {
-          try {
-            const wtResult = cleanupWorktree(baseCwd, record.worktree, options.description);
-            record.worktreeResult = wtResult;
-          } catch { /* ignore cleanup errors */ }
-        }
-
-        this.abortOwnedChildren(id);
-
-        // Fire onComplete for foreground agents too — lifecycle symmetry.
-        // Mark resultConsumed so the callback skips notifications (result returned inline).
-        if (!options.isBackground) {
-          record.resultConsumed = true;
-          this.onComplete?.(record);
-        } else {
-          if (occupiesPoolSlot(record)) this.runningBackground--;
-          this.onComplete?.(record);
-          this.drainQueue();
-        }
+        this.applyWorktreeResult(record, wtResult, baseCwd, customCwd !== undefined);
         return "";
       });
 
     record.promise = promise;
+    // The marker is a reaction to `record.promise`, so the exact revision's
+    // public promise is already settled before consumption or resume can open.
+    void promise.then(() => {
+      if (record.runRevision === runRevision) {
+        record.settledRevision = runRevision;
+        if (!options.isBackground) record.resultConsumed = true;
+        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+      }
+      if (options.isBackground && occupiesPoolSlot(record)) this.runningBackground--;
+      if (options.isBackground) this.drainQueue();
+    });
 
     // Notify caller that spawn is complete (record is in the map, promise is set).
     // Called synchronously — onSessionCreated fires asynchronously inside runAgent.
@@ -422,24 +426,96 @@ export class AgentManager {
     this.onSpawned?.(id);
   }
 
-  /**
-   * Stop the nested children a settled parent owns. Nested records are hidden
-   * from the UI and only their owner can consume them, so a child outliving its
-   * parent would burn tokens unseen with no way to reach it. Grandchildren are
-   * covered transitively — each abort lands in that child's own settle path.
-   */
-  private abortOwnedChildren(parentId: string): void {
-    for (const [id, record] of this.agents) {
-      if (record.parentAgentId === parentId) this.abort(id);
+  private async settleRevisionArtifacts(
+    record: AgentRecord,
+    revision: number,
+    worktree?: WorktreeInfo,
+  ): Promise<WorktreeCleanupResult | undefined> {
+    const outputCleanup = record.outputCleanup;
+    if (outputCleanup && (record.outputCleanupRevision ?? revision) === revision) {
+      try { outputCleanup(); } catch { /* ignore transcript flush errors */ }
+      if (record.outputCleanup === outputCleanup) {
+        record.outputCleanup = undefined;
+        record.outputCleanupRevision = undefined;
+      }
+    }
+
+    // Revision-owned children can share the parent's isolated worktree. Stop
+    // every child writer before taking the parent's checkpoint.
+    const childSettlementError = await this.abortOwnedChildren(record.id, revision);
+
+    if (!worktree) return undefined;
+    if (childSettlementError) {
+      return worktreeCheckpointFailure(worktree.path, childSettlementError);
+    }
+    try {
+      return checkpointWorktree(worktree, record.description);
+    } catch (err) {
+      return worktreeCheckpointFailure(worktree.path, err);
     }
   }
 
-  /** Start queued agents up to the concurrency limit. */
+  private applyWorktreeResult(
+    record: AgentRecord,
+    result: WorktreeCleanupResult | undefined,
+    baseCwd: string,
+    hasCustomCwd: boolean,
+    failureOperation: "checkpoint" | "cleanup" = "checkpoint",
+  ): void {
+    if (!result) return;
+    const previous = record.worktreeResult;
+    record.worktreeResult = result;
+
+    if (result.status === "failed") {
+      const sameFailure = previous?.status === "failed"
+        && previous.path === result.path
+        && previous.error === result.error;
+      if (!sameFailure) {
+        record.result = (record.result ?? "")
+          + `\n\n---\nWorktree ${failureOperation} failed. Changes retained at \`${result.path}\`.\nError: ${result.error}`;
+      }
+      console.warn(`[pi-subagents] Worktree ${failureOperation} failed; retained at ${result.path}: ${result.error}`);
+      return;
+    }
+    if (result.status !== "checkpointed") return;
+
+    const repoNote = hasCustomCwd ? ` in \`${baseCwd}\`` : "";
+    const mergeCwd = hasCustomCwd ? ` (run in \`${baseCwd}\`)` : "";
+    record.result = (record.result ?? "")
+      + `\n\n---\nChanges saved to branch \`${result.branch}\`${repoNote}. Merge with: \`git merge ${result.branch}\`${mergeCwd}`;
+  }
+
+  /** Stop and settle only the nested children created by one exact parent run. */
+  private async abortOwnedChildren(parentId: string, parentRevision: number): Promise<string | undefined> {
+    const owned: { id: string; record: AgentRecord; revision: number; promise?: Promise<string> }[] = [];
+    for (const [id, record] of this.agents) {
+      if (record.parentAgentId !== parentId || record.parentRunRevision !== parentRevision) continue;
+      const revision = record.runRevision;
+      this.abort(id);
+      owned.push({ id, record, revision, promise: record.promise });
+    }
+    await Promise.allSettled(owned.flatMap(child => child.promise ? [child.promise] : []));
+
+    const unsettled = owned.filter(
+      child => child.record.runRevision !== child.revision
+        || child.record.settledRevision !== child.revision,
+    );
+    if (unsettled.length === 0) return undefined;
+    return `Revision-owned child agents did not settle: ${unsettled.map(child => `${child.id}@${child.revision}`).join(", ")}`;
+  }
+
+  /** Start queued agents and resumed turns up to the concurrency limit. */
   private drainQueue() {
     while (this.queue.length > 0 && this.runningBackground < this.maxConcurrent) {
       const next = this.queue.shift()!;
       const record = this.agents.get(next.id);
       if (!record || record.status !== "queued") continue;
+      if (next.kind === "resume") {
+        if (record.runRevision === next.revision) {
+          this.startBackgroundResume(record, next.prompt, next.revision);
+        }
+        continue;
+      }
       try {
         this.startAgent(next.id, record, next.args);
       } catch (err) {
@@ -448,6 +524,7 @@ export class AgentManager {
         record.status = "error";
         record.error = err instanceof Error ? err.message : String(err);
         record.completedAt = Date.now();
+        record.settledRevision = record.runRevision;
         this.onComplete?.(record);
       }
     }
@@ -493,54 +570,165 @@ export class AgentManager {
     return { id, record };
   }
 
-  /**
-   * Resume an existing agent session with a new prompt.
-   */
+  private canResume(record: AgentRecord): boolean {
+    return record.status !== "running"
+      && record.status !== "queued"
+      && record.settledRevision === record.runRevision
+      && record.resultConsumed === true
+      && record.pendingDeliveryRevision !== record.runRevision;
+  }
+
+  private beginResume(record: AgentRecord, status: "queued" | "running"): number {
+    record.runRevision += 1;
+    record.status = status;
+    record.startedAt = Date.now();
+    record.completedAt = undefined;
+    record.result = undefined;
+    record.error = undefined;
+    record.promise = undefined;
+    record.resultConsumed = false;
+    record.stoppingRevision = undefined;
+    record.abortController = new AbortController();
+    if (record.worktree) record.worktreeRevision = record.runRevision;
+    return record.runRevision;
+  }
+
+  private async executeResume(
+    record: AgentRecord,
+    prompt: string,
+    revision: number,
+    signal?: AbortSignal,
+  ): Promise<AgentRecord> {
+    const session = record.session!;
+    const worktree = record.worktree;
+    if (record.outputFile && record.outputCwd) {
+      const historyBoundary = session.messages.length;
+      const initialWrittenCount = historyBoundary + (record.outputPromptRevision === revision ? 1 : 0);
+      record.outputCleanup = streamToOutputFile(
+        session,
+        record.outputFile,
+        record.id,
+        record.outputCwd,
+        initialWrittenCount,
+      );
+      record.outputCleanupRevision = revision;
+    }
+
+    try {
+      const { text, failure } = await resumeAgent(session, prompt, {
+        onToolActivity: (activity) => {
+          if (record.runRevision === revision && activity.type === "end") record.toolUses++;
+        },
+        onAssistantUsage: (usage) => {
+          if (record.runRevision === revision) addUsage(record.lifetimeUsage, usage);
+        },
+        onCompaction: (info) => {
+          if (record.runRevision !== revision) return;
+          record.compactionCount++;
+          this.onCompact?.(record, info);
+        },
+        signal,
+      });
+      if (record.runRevision === revision) {
+        if (record.status !== "stopped") {
+          record.status = failure ? "error" : "completed";
+          if (failure) record.error = failure;
+        }
+        record.result = text;
+        record.completedAt = Date.now();
+      }
+    } catch (err) {
+      if (record.runRevision === revision) {
+        if (record.status !== "stopped") {
+          record.status = "error";
+          record.error = err instanceof Error ? err.message : String(err);
+        }
+        record.completedAt = Date.now();
+      }
+    }
+
+    const worktreeResult = await this.settleRevisionArtifacts(record, revision, worktree);
+    if (record.runRevision !== revision) return record;
+
+    if (record.worktreeBaseCwd) {
+      this.applyWorktreeResult(
+        record,
+        worktreeResult,
+        record.worktreeBaseCwd,
+        record.worktreeHasCustomCwd === true,
+      );
+    }
+    return record;
+  }
+
+  /** Resume an existing agent session and wait for its next turn. */
   async resume(
     id: string,
     prompt: string,
     signal?: AbortSignal,
   ): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
-    if (!record?.session) return undefined;
+    if (!record?.session || !this.canResume(record)) return undefined;
+    const revision = this.beginResume(record, "running");
+    const controller = record.abortController!;
+    const forwardAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
 
+    const execution = this.executeResume(record, prompt, revision, controller.signal);
+    const promise = execution.then(resumed => resumed.runRevision === revision ? resumed.result ?? "" : "");
+    record.promise = promise;
+    const settlement = promise.then(() => {
+      if (record.runRevision === revision) record.settledRevision = revision;
+    });
+    try {
+      const resumed = await execution;
+      await settlement;
+      if (resumed.runRevision !== revision || resumed.settledRevision !== revision) return undefined;
+      resumed.resultConsumed = true;
+      return resumed;
+    } finally {
+      signal?.removeEventListener("abort", forwardAbort);
+    }
+  }
+
+  /** Queue a top-level background resume under the shared concurrency limit. */
+  resumeInBackground(id: string, prompt: string): AgentRecord | undefined {
+    const record = this.agents.get(id);
+    if (!record?.session || record.parentAgentId || !this.canResume(record)) return undefined;
+
+    const revision = this.beginResume(record, "queued");
+    // Resume reuses the record, so replace the prior run's identity at dispatch
+    // time. Queue start must preserve this value.
+    record.parentSessionGeneration = this.captureParentGeneration?.();
+    if (this.runningBackground >= this.maxConcurrent) {
+      this.queue.push({ kind: "resume", id, prompt, revision });
+    } else {
+      this.startBackgroundResume(record, prompt, revision);
+    }
+    return record;
+  }
+
+  private startBackgroundResume(record: AgentRecord, prompt: string, revision: number): void {
+    if (record.runRevision !== revision || record.status !== "queued") return;
     record.status = "running";
     record.startedAt = Date.now();
-    record.completedAt = undefined;
-    record.result = undefined;
-    record.error = undefined;
+    this.runningBackground++;
+    this.onStart?.(record);
 
-    try {
-      const { text, failure } = await resumeAgent(record.session, prompt, {
-        onToolActivity: (activity) => {
-          if (activity.type === "end") record.toolUses++;
-        },
-        onAssistantUsage: (usage) => {
-          addUsage(record.lifetimeUsage, usage);
-        },
-        onCompaction: (info) => {
-          record.compactionCount++;
-          this.onCompact?.(record, info);
-        },
-        signal,
-      });
-      // Same contract as the spawn path (#144): a failed final turn is an
-      // error, not a completion — but the resumed text stays available.
-      record.status = failure ? "error" : "completed";
-      if (failure) record.error = failure;
-      record.result = text;
-      record.completedAt = Date.now();
-    } catch (err) {
-      record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
-      record.completedAt = Date.now();
-    }
-
-    // Same contract as the spawn settle paths: children spawned during the
-    // resumed turn must not outlive it — nothing else can see or reach them.
-    this.abortOwnedChildren(id);
-
-    return record;
+    const execution = this.executeResume(record, prompt, revision, record.abortController?.signal);
+    const promise = execution.then(
+      resumed => resumed.runRevision === revision ? resumed.result ?? "" : "",
+    );
+    record.promise = promise;
+    void promise.then(() => {
+      this.runningBackground--;
+      if (record.runRevision === revision) {
+        record.settledRevision = revision;
+        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+      }
+      this.drainQueue();
+    });
   }
 
   /**
@@ -581,20 +769,83 @@ export class AgentManager {
     // Remove from queue if queued
     if (record.status === "queued") {
       this.queue = this.queue.filter(q => q.id !== id);
+      record.stoppingRevision = record.runRevision;
       record.status = "stopped";
       record.completedAt = Date.now();
+      record.settledRevision = record.runRevision;
       return true;
     }
 
     if (record.status !== "running") return false;
+    record.stoppingRevision = record.runRevision;
     record.abortController?.abort();
     record.status = "stopped";
     record.completedAt = Date.now();
     return true;
   }
 
-  /** Dispose a record's session and remove it from the map. */
+  /** Remove eligible nested records before their parents can remove a shared cleanup cwd. */
+  private removeRecordsChildFirst(shouldRemove: (record: AgentRecord) => boolean): void {
+    const candidates = [...this.agents.entries()]
+      .filter(([, record]) => shouldRemove(record))
+      .sort(([, a], [, b]) => (b.depth ?? 1) - (a.depth ?? 1));
+
+    for (const [id, record] of candidates) {
+      if ([...this.agents.values()].some(child => child.parentAgentId === id)) continue;
+      this.removeRecord(id, record);
+    }
+  }
+
+  /** Dispose a settled record's session, clean retained artifacts, and remove it from the map. */
   private removeRecord(id: string, record: AgentRecord): void {
+    if (record.settledRevision !== record.runRevision) {
+      const worktreeNote = record.worktree ? ` Worktree retained at ${record.worktree.path}.` : "";
+      console.warn(`[pi-subagents] Agent ${id} is still settling revision ${record.runRevision}; artifacts were retained.${worktreeNote}`);
+      return;
+    }
+
+    if (record.worktree) {
+      if (!record.worktreeBaseCwd) {
+        this.applyWorktreeResult(
+          record,
+          worktreeCheckpointFailure(record.worktree.path, "Worktree base repository is unavailable."),
+          "",
+          false,
+          "cleanup",
+        );
+        return;
+      }
+      if (record.worktreeResult?.status === "failed") {
+        console.warn(
+          `[pi-subagents] Worktree retained at ${record.worktreeResult.path}: ${record.worktreeResult.error}`,
+        );
+        return;
+      }
+
+      let cleanupResult: WorktreeCleanupResult;
+      try {
+        cleanupResult = cleanupWorktree(record.worktreeBaseCwd, record.worktree, record.description);
+      } catch (err) {
+        cleanupResult = worktreeCheckpointFailure(record.worktree.path, err);
+      }
+      if (cleanupResult.status === "failed") {
+        this.applyWorktreeResult(
+          record,
+          cleanupResult,
+          record.worktreeBaseCwd,
+          record.worktreeHasCustomCwd === true,
+          "cleanup",
+        );
+        return;
+      }
+      record.worktree = undefined;
+    }
+
+    if (record.outputCleanup) {
+      try { record.outputCleanup(); } catch { /* ignore transcript flush errors */ }
+      record.outputCleanup = undefined;
+      record.outputCleanupRevision = undefined;
+    }
     record.session?.dispose?.();
     record.session = undefined;
     this.agents.delete(id);
@@ -602,11 +853,12 @@ export class AgentManager {
 
   private cleanup() {
     const cutoff = Date.now() - 10 * 60_000;
-    for (const [id, record] of this.agents) {
-      if (record.status === "running" || record.status === "queued") continue;
-      if ((record.completedAt ?? 0) >= cutoff) continue;
-      this.removeRecord(id, record);
-    }
+    this.removeRecordsChildFirst(record =>
+      record.status !== "running"
+      && record.status !== "queued"
+      && record.settledRevision === record.runRevision
+      && (record.completedAt ?? 0) < cutoff
+    );
   }
 
   /**
@@ -616,17 +868,18 @@ export class AgentManager {
    * (resultConsumed=false) — they will be evicted by the 10-minute cleanup timer instead.
    */
   clearCompleted(skipUnconsumed = false): void {
-    for (const [id, record] of this.agents) {
-      if (record.status === "running" || record.status === "queued") continue;
-      if (skipUnconsumed && !record.resultConsumed) continue;
-      this.removeRecord(id, record);
-    }
+    this.removeRecordsChildFirst(record =>
+      record.status !== "running"
+      && record.status !== "queued"
+      && record.settledRevision === record.runRevision
+      && (!skipUnconsumed || record.resultConsumed === true)
+    );
   }
 
-  /** Whether any agents are still running or queued. */
+  /** Whether any agent revision is queued, running, or still settling after stop. */
   hasRunning(): boolean {
     return [...this.agents.values()].some(
-      r => r.status === "running" || r.status === "queued",
+      record => record.status === "queued" || record.settledRevision !== record.runRevision,
     );
   }
 
@@ -637,8 +890,10 @@ export class AgentManager {
     for (const queued of this.queue) {
       const record = this.agents.get(queued.id);
       if (record) {
+        record.stoppingRevision = record.runRevision;
         record.status = "stopped";
         record.completedAt = Date.now();
+        record.settledRevision = record.runRevision;
         count++;
       }
     }
@@ -646,6 +901,7 @@ export class AgentManager {
     // Abort running agents
     for (const record of this.agents.values()) {
       if (record.status === "running") {
+        record.stoppingRevision = record.runRevision;
         record.abortController?.abort();
         record.status = "stopped";
         record.completedAt = Date.now();
@@ -662,8 +918,8 @@ export class AgentManager {
     while (true) {
       this.drainQueue();
       const pending = [...this.agents.values()]
-        .filter(r => r.status === "running" || r.status === "queued")
-        .map(r => r.promise)
+        .filter(record => record.status === "queued" || record.settledRevision !== record.runRevision)
+        .map(record => record.promise)
         .filter(Boolean);
       if (pending.length === 0) break;
       await Promise.allSettled(pending);
@@ -672,12 +928,8 @@ export class AgentManager {
 
   dispose() {
     clearInterval(this.cleanupInterval);
-    // Clear queue
-    this.queue = [];
-    for (const record of this.agents.values()) {
-      record.session?.dispose();
-    }
-    this.agents.clear();
+    this.abortAll();
+    this.removeRecordsChildFirst(() => true);
     // Prune any orphaned git worktrees (crash recovery)
     try { pruneWorktrees(process.cwd()); } catch { /* ignore */ }
     // Also prune repos that caller-supplied cwds created worktrees in — a clean

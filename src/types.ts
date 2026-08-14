@@ -5,6 +5,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { LifetimeUsage } from "./usage.js";
+import type { WorktreeCleanupResult } from "./worktree.js";
 
 export type { ThinkingLevel };
 
@@ -98,20 +99,42 @@ export interface AgentRecord {
   promise?: Promise<string>;
   groupId?: string;
   joinMode?: JoinMode;
+  /** Monotonic identity of the current run stored in this reusable record. */
+  runRevision: number;
+  /** Revision whose abort has been requested but whose execution promise can still be settling. */
+  stoppingRevision?: number;
+  /** Latest revision whose execution promise and revision-owned cleanup have fully settled. */
+  settledRevision?: number;
   /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
   resultConsumed?: boolean;
+  /** Current run revision that still has a completion delivery pending. */
+  pendingDeliveryRevision?: number;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];
   /** Worktree info if the agent is running in an isolated worktree. */
-  worktree?: { path: string; branch: string; baseSha: string; workPath: string };
-  /** Worktree cleanup result after agent completion. */
-  worktreeResult?: { hasChanges: boolean; branch?: string };
+  worktree?: { path: string; branch: string; baseSha: string; workPath: string; branchCreated?: boolean };
+  /** Revision that owns the retained isolated worktree. */
+  worktreeRevision?: number;
+  /** Repository used to create and definitively remove the retained worktree. */
+  worktreeBaseCwd?: string;
+  /** Whether the retained worktree came from a caller-supplied cwd. */
+  worktreeHasCustomCwd?: boolean;
+  /** Worktree checkpoint result after an agent turn. */
+  worktreeResult?: WorktreeCleanupResult;
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
   /** Path to the streaming output transcript file. */
   outputFile?: string;
+  /** Parent generation that owns the advertised top-level transcript path. */
+  outputFileGeneration?: number;
+  /** Cwd written into transcript entries. */
+  outputCwd?: string;
+  /** Resume revision whose prompt was written before session streaming starts. */
+  outputPromptRevision?: number;
   /** Cleanup function for the output file stream subscription. */
   outputCleanup?: () => void;
+  /** Revision that owns the output stream subscription. */
+  outputCleanupRevision?: number;
   /**
    * Lifetime usage breakdown, accumulated via `message_end` events. Survives
    * compaction. Total = input + output + cacheWrite (cacheRead deliberately
@@ -137,6 +160,13 @@ export interface AgentRecord {
   depth?: number;
   /** Parent agent ID for ownership-scoped nested controls. */
   parentAgentId?: string;
+  /** Exact parent run revision that created this nested child. */
+  parentRunRevision?: number;
+  /**
+   * Parent session generation captured when a top-level spawn or background
+   * resume is dispatched. Queue start does not change this identity.
+   */
+  parentSessionGeneration?: number;
   /** Effective inherited nesting cap for this branch. */
   maxSubagentDepth?: number;
   /**

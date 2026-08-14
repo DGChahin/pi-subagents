@@ -70,15 +70,17 @@ export function writeInitialEntry(path: string, agentId: string, prompt: string,
 
 /**
  * Subscribe to session events and flush new messages to the output file on each turn_end.
- * Returns a cleanup function that does a final flush and unsubscribes.
+ * `initialWrittenCount` is the session-history boundary already represented in
+ * the file. Returns a cleanup function that does a final flush and unsubscribes.
  */
 export function streamToOutputFile(
   session: AgentSession,
   path: string,
   agentId: string,
   cwd: string,
+  initialWrittenCount = 1,
 ): () => void {
-  let writtenCount = 1; // initial user prompt already written
+  let writtenCount = initialWrittenCount;
 
   const flush = () => {
     const messages = session.messages;

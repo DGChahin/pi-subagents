@@ -10,11 +10,13 @@ vi.mock("../src/agent-runner.js", () => ({
 
 vi.mock("../src/worktree.js", () => ({
   createWorktree: vi.fn(),
-  cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
+  checkpointWorktree: vi.fn(() => ({ status: "unchanged", hasChanges: false })),
+  cleanupWorktree: vi.fn(() => ({ status: "unchanged", hasChanges: false })),
   pruneWorktrees: vi.fn(),
 }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { checkpointWorktree, cleanupWorktree, createWorktree } from "../src/worktree.js";
 
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;
@@ -348,6 +350,7 @@ describe("AgentManager — nested runtime propagation", () => {
       isBackground: true,
     });
     await manager.getRecord(parentId)!.promise;
+    manager.getRecord(parentId)!.resultConsumed = true;
 
     let childId = "";
     vi.mocked(resumeAgent).mockImplementation(async () => {
@@ -651,8 +654,8 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     expect(manager.getRecord(id)!.compactionCount).toBe(0);
 
     // Now resume — drive callbacks via the mocked resumeAgent
-    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
-    vi.mocked(resumeMock).mockImplementation(async (_session, _prompt, opts: any) => {
+    manager.getRecord(id)!.resultConsumed = true;
+    vi.mocked(resumeAgent).mockImplementation(async (_session, _prompt, opts: any) => {
       opts.onAssistantUsage?.({ input: 70, output: 30, cacheWrite: 5 });
       opts.onCompaction?.({ reason: "overflow", tokensBefore: 999 });
       return { text: "second" };
@@ -675,8 +678,7 @@ describe("AgentManager — isolation: worktree fails loud, no silent fallback", 
     manager?.dispose();
   });
 
-  it("spawn() throws when createWorktree returns undefined; no orphan record left behind", async () => {
-    const { createWorktree } = await import("../src/worktree.js");
+  it("spawn() throws when createWorktree returns undefined; no orphan record left behind", () => {
     vi.mocked(createWorktree).mockReturnValueOnce(undefined);
     vi.mocked(runAgent).mockClear();
 
@@ -743,8 +745,7 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
     expect(opts.configCwd).toBeUndefined();
   });
 
-  it("cwd + isolation: worktree — worktree created FROM cwd, session runs at the copy's workPath, cleanup targets cwd's repo", async () => {
-    const { createWorktree, cleanupWorktree } = await import("../src/worktree.js");
+  it("cwd + isolation: worktree — worktree created from cwd, session runs at workPath, and settlement only checkpoints", async () => {
     vi.mocked(createWorktree).mockReturnValueOnce({
       path: "/wt/copy", branch: "pi-agent-x", baseSha: "abc", workPath: "/wt/copy/packages/api",
     });
@@ -765,14 +766,15 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
       mockCtx, "general-purpose", "test",
       expect.objectContaining({ cwd: "/wt/copy/packages/api", configCwd: "/tmp" }),
     );
-    expect(cleanupWorktree).toHaveBeenCalledWith("/", expect.anything(), "test");
+    expect(checkpointWorktree).toHaveBeenCalledWith(expect.anything(), "test");
+    expect(cleanupWorktree).not.toHaveBeenCalled();
+    expect(manager.getRecord(id)?.worktree?.path).toBe("/wt/copy");
   });
 
   it("plain worktree (no cwd) keeps the historical root working dir even when workPath differs", async () => {
     // Parent session sitting in a repo subdirectory: workPath would point at
     // the copied subdir. Without SpawnOptions.cwd the agent must stay at the
     // copy's root — moving it would also move .pi config discovery.
-    const { createWorktree } = await import("../src/worktree.js");
     vi.mocked(createWorktree).mockReturnValueOnce({
       path: "/wt/copy", branch: "pi-agent-x", baseSha: "abc", workPath: "/wt/copy/sub/dir",
     });
@@ -1042,7 +1044,9 @@ describe("AgentManager — abortAll", () => {
     expect(manager.abortAll()).toBe(2);
     expect(manager.getRecord(running)?.status).toBe("stopped");
     expect(manager.getRecord(queued)?.status).toBe("stopped");
-    expect(manager.hasRunning()).toBe(false);
+    // The queued revision settles synchronously, but the running revision still
+    // owns live cleanup until its execution promise settles.
+    expect(manager.hasRunning()).toBe(true);
   });
 
   it("returns 0 when there are no running or queued agents", () => {
@@ -1175,11 +1179,11 @@ describe("AgentManager — resolved runs with a failed final turn map to error (
     const record = manager.getRecord(id)!;
     await record.promise;
     expect(record.status).toBe("completed");
+    record.resultConsumed = true;
 
-    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
     // resumeAgent bounds its fallback to this invocation, so a failed empty
     // resume yields text "" — never the prior turn's answer (#144 root-fix).
-    vi.mocked(resumeMock).mockResolvedValue({
+    vi.mocked(resumeAgent).mockResolvedValue({
       text: "",
       failure: "retries exhausted on resume",
     });
@@ -1197,9 +1201,9 @@ describe("AgentManager — resolved runs with a failed final turn map to error (
     const id = manager.spawn(mockPi, mockCtx, "X", "p", { description: "x", isBackground: true });
     const record = manager.getRecord(id)!;
     await record.promise;
+    record.resultConsumed = true;
 
-    const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
-    vi.mocked(resumeMock).mockResolvedValue({
+    vi.mocked(resumeAgent).mockResolvedValue({
       text: "new partial progress",
       failure: "provider died mid-turn",
     });

@@ -209,7 +209,10 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     // is deleted or disabled — the opposite of what strict dispatch is for.
     const { tools } = boot();
     vi.mocked(runAgent).mockResolvedValue({
-      responseText: "first", session: { dispose: vi.fn() } as any, aborted: false, steered: false,
+      responseText: "first",
+      session: { messages: [], subscribe: vi.fn(() => vi.fn()), dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
     });
     const spawned = await tools.get("Agent").execute(
       "tc-6",
@@ -219,6 +222,12 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     const id = /Agent ID: (\S+)/.exec(textOf(spawned))?.[1]
       ?? (spawned as any).details?.agentId;
     expect(id).toBeTruthy();
+    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+    const firstResult = await tools.get("get_subagent_result").execute(
+      "tc-6-result", { agent_id: id }, undefined, undefined, ctx(),
+    );
+    expect(textOf(firstResult)).toContain("first");
 
     setFallbackSubagent(NO_FALLBACK);
     const resumed = await tools.get("Agent").execute(

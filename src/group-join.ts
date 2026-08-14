@@ -8,12 +8,17 @@
 
 import type { AgentRecord } from "./types.js";
 
-export type DeliveryCallback = (records: AgentRecord[], partial: boolean) => void;
+export interface AgentRunCompletion {
+  readonly record: AgentRecord;
+  readonly revision: number;
+}
+
+export type DeliveryCallback = (completions: readonly AgentRunCompletion[], partial: boolean) => void;
 
 interface AgentGroup {
   groupId: string;
-  agentIds: Set<string>;
-  completedRecords: Map<string, AgentRecord>;
+  agentRevisions: Map<string, number>;
+  completedRuns: Map<string, AgentRunCompletion>;
   timeoutHandle?: ReturnType<typeof setTimeout>;
   delivered: boolean;
   /** Shorter timeout for stragglers after a partial delivery. */
@@ -34,18 +39,19 @@ export class GroupJoinManager {
     private groupTimeout = DEFAULT_TIMEOUT,
   ) {}
 
-  /** Register a group of agent IDs that should be joined. */
-  registerGroup(groupId: string, agentIds: string[]): void {
+  /** Register specific agent runs that should be joined. */
+  registerGroup(groupId: string, completions: readonly AgentRunCompletion[]): void {
+    if (completions.length === 0) return;
     const group: AgentGroup = {
       groupId,
-      agentIds: new Set(agentIds),
-      completedRecords: new Map(),
+      agentRevisions: new Map(completions.map(({ record, revision }) => [record.id, revision])),
+      completedRuns: new Map(),
       delivered: false,
       isStraggler: false,
     };
     this.groups.set(groupId, group);
-    for (const id of agentIds) {
-      this.agentToGroup.set(id, groupId);
+    for (const { record } of completions) {
+      this.agentToGroup.set(record.id, groupId);
     }
   }
 
@@ -56,17 +62,25 @@ export class GroupJoinManager {
    * - 'held'      — result held, waiting for group completion
    * - 'delivered'  — this completion triggered the group notification
    */
-  onAgentComplete(record: AgentRecord): 'delivered' | 'held' | 'pass' {
+  onAgentComplete(completion: AgentRunCompletion): 'delivered' | 'held' | 'pass' {
+    const { record, revision } = completion;
     const groupId = this.agentToGroup.get(record.id);
     if (!groupId) return 'pass';
 
     const group = this.groups.get(groupId);
-    if (!group || group.delivered) return 'pass';
+    if (
+      !group
+      || group.delivered
+      || group.agentRevisions.get(record.id) !== revision
+      || record.runRevision !== revision
+      || record.pendingDeliveryRevision !== revision
+      || record.resultConsumed === true
+    ) return 'pass';
 
-    group.completedRecords.set(record.id, record);
+    group.completedRuns.set(record.id, completion);
 
     // All done — deliver immediately
-    if (group.completedRecords.size >= group.agentIds.size) {
+    if (group.completedRuns.size >= group.agentRevisions.size) {
       this.deliver(group, false);
       return 'delivered';
     }
@@ -87,23 +101,29 @@ export class GroupJoinManager {
     group.timeoutHandle = undefined;
 
     // Partial delivery — some agents still running
-    const remaining = new Set<string>();
-    for (const id of group.agentIds) {
-      if (!group.completedRecords.has(id)) remaining.add(id);
+    const remaining = new Map<string, number>();
+    for (const [id, revision] of group.agentRevisions) {
+      if (!group.completedRuns.has(id)) remaining.set(id, revision);
     }
 
     // Clean up agentToGroup for delivered agents (they won't complete again)
-    for (const id of group.completedRecords.keys()) {
+    for (const id of group.completedRuns.keys()) {
       this.agentToGroup.delete(id);
     }
 
     // Deliver what we have
-    this.deliverCb([...group.completedRecords.values()], true);
+    const completed = [...group.completedRuns.values()].filter(
+      ({ record, revision }) => record.runRevision === revision
+        && record.pendingDeliveryRevision === revision
+        && record.resultConsumed !== true,
+    );
+    if (completed.length > 0) this.deliverCb(completed, true);
 
     // Set up straggler group for remaining agents
-    group.completedRecords.clear();
-    group.agentIds = remaining;
+    group.completedRuns.clear();
+    group.agentRevisions = remaining;
     group.isStraggler = true;
+    if (remaining.size === 0) this.cleanupGroup(group.groupId);
     // Timeout will be started when the next straggler completes
   }
 
@@ -113,17 +133,52 @@ export class GroupJoinManager {
       group.timeoutHandle = undefined;
     }
     group.delivered = true;
-    this.deliverCb([...group.completedRecords.values()], partial);
+    const completed = [...group.completedRuns.values()].filter(
+      ({ record, revision }) => record.runRevision === revision
+        && record.pendingDeliveryRevision === revision
+        && record.resultConsumed !== true,
+    );
+    if (completed.length > 0) this.deliverCb(completed, partial);
     this.cleanupGroup(group.groupId);
   }
 
   private cleanupGroup(groupId: string): void {
     const group = this.groups.get(groupId);
     if (!group) return;
-    for (const id of group.agentIds) {
+    if (group.timeoutHandle) clearTimeout(group.timeoutHandle);
+    for (const id of group.agentRevisions.keys()) {
       this.agentToGroup.delete(id);
     }
     this.groups.delete(groupId);
+  }
+
+  /** Remove one consumed run without affecting a later run with the same ID. */
+  consume(agentId: string, revision: number): boolean {
+    const groupId = this.agentToGroup.get(agentId);
+    if (!groupId) return false;
+    const group = this.groups.get(groupId);
+    if (!group || group.agentRevisions.get(agentId) !== revision) return false;
+
+    group.agentRevisions.delete(agentId);
+    group.completedRuns.delete(agentId);
+    this.agentToGroup.delete(agentId);
+    if (group.agentRevisions.size === 0) {
+      this.cleanupGroup(groupId);
+    } else if (group.completedRuns.size >= group.agentRevisions.size) {
+      this.deliver(group, false);
+    }
+    return true;
+  }
+
+  /** Cancel every group and return the completed runs that were held. */
+  cancelPending(): readonly AgentRunCompletion[] {
+    const pending = [...this.groups.values()].flatMap(group => [...group.completedRuns.values()]);
+    for (const group of this.groups.values()) {
+      if (group.timeoutHandle) clearTimeout(group.timeoutHandle);
+    }
+    this.groups.clear();
+    this.agentToGroup.clear();
+    return pending;
   }
 
   /** Check if an agent is in a group. */
@@ -132,10 +187,6 @@ export class GroupJoinManager {
   }
 
   dispose(): void {
-    for (const group of this.groups.values()) {
-      if (group.timeoutHandle) clearTimeout(group.timeoutHandle);
-    }
-    this.groups.clear();
-    this.agentToGroup.clear();
+    this.cancelPending();
   }
 }
