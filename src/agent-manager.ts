@@ -71,7 +71,7 @@ interface SpawnArgs {
 
 type QueueEntry =
   | { kind: "spawn"; id: string; args: SpawnArgs }
-  | { kind: "resume"; id: string; prompt: string };
+  | { kind: "resume"; id: string; prompt: string; revision: number };
 
 interface SpawnOptions {
   description: string;
@@ -199,6 +199,7 @@ export class AgentManager {
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
       compactionCount: 0,
+      runRevision: 1,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
       // declared it (e.g. a cross-extension RPC spawn). The widget's background-
@@ -284,6 +285,7 @@ export class AgentManager {
       detachParentSignal = () => options.signal!.removeEventListener("abort", onParentAbort);
     }
     const detach = () => { detachParentSignal?.(); detachParentSignal = undefined; };
+    const runRevision = record.runRevision;
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
@@ -302,16 +304,23 @@ export class AgentManager {
       configCwd: options.configCwd ?? (customCwd !== undefined ? ctx.cwd : undefined),
       signal: record.abortController!.signal,
       onToolActivity: (activity) => {
+        if (record.runRevision !== runRevision) return;
         if (activity.type === "end") record.toolUses++;
         options.onToolActivity?.(activity);
       },
-      onTurnEnd: options.onTurnEnd,
-      onTextDelta: options.onTextDelta,
+      onTurnEnd: (turnCount) => {
+        if (record.runRevision === runRevision) options.onTurnEnd?.(turnCount);
+      },
+      onTextDelta: (delta, fullText) => {
+        if (record.runRevision === runRevision) options.onTextDelta?.(delta, fullText);
+      },
       onAssistantUsage: (usage) => {
+        if (record.runRevision !== runRevision) return;
         addUsage(record.lifetimeUsage, usage);
         options.onAssistantUsage?.(usage);
       },
       onCompaction: (info) => {
+        if (record.runRevision !== runRevision) return;
         record.compactionCount++;
         this.onCompact?.(record, info);
         options.onCompaction?.(info);
@@ -335,6 +344,12 @@ export class AgentManager {
       },
     })
       .then(({ responseText, session, aborted, steered, failure }) => {
+        if (record.runRevision !== runRevision) {
+          detach();
+          if (options.isBackground && occupiesPoolSlot(record)) this.runningBackground--;
+          if (options.isBackground) this.drainQueue();
+          return responseText;
+        }
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           // Precedence: a hard abort keeps "aborted"; then a failed final turn
@@ -389,6 +404,12 @@ export class AgentManager {
         return responseText;
       })
       .catch((err) => {
+        if (record.runRevision !== runRevision) {
+          detach();
+          if (options.isBackground && occupiesPoolSlot(record)) this.runningBackground--;
+          if (options.isBackground) this.drainQueue();
+          return "";
+        }
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           record.status = "error";
@@ -454,7 +475,9 @@ export class AgentManager {
       const record = this.agents.get(next.id);
       if (!record || record.status !== "queued") continue;
       if (next.kind === "resume") {
-        this.startBackgroundResume(record, next.prompt);
+        if (record.runRevision === next.revision) {
+          this.startBackgroundResume(record, next.prompt, next.revision);
+        }
         continue;
       }
       try {
@@ -510,34 +533,47 @@ export class AgentManager {
     return { id, record };
   }
 
-  private prepareResume(record: AgentRecord, status: "queued" | "running"): void {
+  private canResume(record: AgentRecord): boolean {
+    return record.status !== "running"
+      && record.status !== "queued"
+      && record.resultConsumed === true
+      && record.pendingDeliveryRevision !== record.runRevision;
+  }
+
+  private beginResume(record: AgentRecord, status: "queued" | "running"): number {
+    record.runRevision += 1;
     record.status = status;
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
     record.promise = undefined;
+    record.resultConsumed = false;
+    return record.runRevision;
   }
 
   private async executeResume(
     record: AgentRecord,
     prompt: string,
+    revision: number,
     signal?: AbortSignal,
   ): Promise<AgentRecord> {
     try {
       const { text, failure } = await resumeAgent(record.session!, prompt, {
         onToolActivity: (activity) => {
-          if (activity.type === "end") record.toolUses++;
+          if (record.runRevision === revision && activity.type === "end") record.toolUses++;
         },
         onAssistantUsage: (usage) => {
-          addUsage(record.lifetimeUsage, usage);
+          if (record.runRevision === revision) addUsage(record.lifetimeUsage, usage);
         },
         onCompaction: (info) => {
+          if (record.runRevision !== revision) return;
           record.compactionCount++;
           this.onCompact?.(record, info);
         },
         signal,
       });
+      if (record.runRevision !== revision) return record;
       // Same contract as the spawn path (#144): a failed final turn is an
       // error, not a completion — but the resumed text stays available.
       if (record.status !== "stopped") {
@@ -547,6 +583,7 @@ export class AgentManager {
       record.result = text;
       record.completedAt = Date.now();
     } catch (err) {
+      if (record.runRevision !== revision) return record;
       if (record.status !== "stopped") {
         record.status = "error";
         record.error = err instanceof Error ? err.message : String(err);
@@ -556,7 +593,7 @@ export class AgentManager {
 
     // Same contract as the spawn settle paths: children spawned during the
     // resumed turn must not outlive it — nothing else can see or reach them.
-    this.abortOwnedChildren(record.id);
+    if (record.runRevision === revision) this.abortOwnedChildren(record.id);
     return record;
   }
 
@@ -567,41 +604,47 @@ export class AgentManager {
     signal?: AbortSignal,
   ): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
-    if (!record?.session) return undefined;
-    this.prepareResume(record, "running");
-    return this.executeResume(record, prompt, signal);
+    if (!record?.session || !this.canResume(record)) return undefined;
+    const revision = this.beginResume(record, "running");
+    const resumed = await this.executeResume(record, prompt, revision, signal);
+    if (resumed.runRevision !== revision) return undefined;
+    resumed.resultConsumed = true;
+    return resumed;
   }
 
   /** Queue a top-level background resume under the shared concurrency limit. */
   resumeInBackground(id: string, prompt: string): AgentRecord | undefined {
     const record = this.agents.get(id);
-    if (!record?.session || record.parentAgentId) return undefined;
-    if (record.status === "running" || record.status === "queued") return undefined;
+    if (!record?.session || record.parentAgentId || !this.canResume(record)) return undefined;
 
+    const revision = this.beginResume(record, "queued");
     record.abortController = new AbortController();
     // Resume reuses the record, so replace the prior run's identity at dispatch
     // time. Queue start must preserve this value.
     record.parentSessionGeneration = this.captureParentGeneration?.();
-    this.prepareResume(record, "queued");
     if (this.runningBackground >= this.maxConcurrent) {
-      this.queue.push({ kind: "resume", id, prompt });
+      this.queue.push({ kind: "resume", id, prompt, revision });
     } else {
-      this.startBackgroundResume(record, prompt);
+      this.startBackgroundResume(record, prompt, revision);
     }
     return record;
   }
 
-  private startBackgroundResume(record: AgentRecord, prompt: string): void {
-    this.prepareResume(record, "running");
+  private startBackgroundResume(record: AgentRecord, prompt: string, revision: number): void {
+    if (record.runRevision !== revision || record.status !== "queued") return;
+    record.status = "running";
+    record.startedAt = Date.now();
     this.runningBackground++;
     this.onStart?.(record);
 
-    record.promise = this.executeResume(record, prompt, record.abortController?.signal)
+    record.promise = this.executeResume(record, prompt, revision, record.abortController?.signal)
       .then((resumed) => {
         this.runningBackground--;
-        try { this.onComplete?.(resumed); } catch { /* ignore completion side-effect errors */ }
+        if (resumed.runRevision === revision) {
+          try { this.onComplete?.(resumed); } catch { /* ignore completion side-effect errors */ }
+        }
         this.drainQueue();
-        return resumed.result ?? "";
+        return resumed.runRevision === revision ? resumed.result ?? "" : "";
       });
   }
 

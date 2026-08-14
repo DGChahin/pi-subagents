@@ -98,8 +98,12 @@ export interface AgentRecord {
   promise?: Promise<string>;
   groupId?: string;
   joinMode?: JoinMode;
+  /** Monotonic identity of the current run stored in this reusable record. */
+  runRevision: number;
   /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
   resultConsumed?: boolean;
+  /** Current run revision that still has a completion delivery pending. */
+  pendingDeliveryRevision?: number;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];
   /** Worktree info if the agent is running in an isolated worktree. */

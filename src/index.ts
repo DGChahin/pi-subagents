@@ -22,7 +22,7 @@ import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, get
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
-import { GroupJoinManager } from "./group-join.js";
+import { type AgentRunCompletion, GroupJoinManager } from "./group-join.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
@@ -263,12 +263,15 @@ export default function (pi: ExtensionAPI) {
   // ---- Cancellable pending notifications ----
   // Holds notifications briefly so get_subagent_result can cancel them before
   // delivery. A claimed compaction barrier keeps them out of Pi's pending queue.
-  const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
-  interface HeldCompletion {
-    readonly record: AgentRecord;
+  interface HeldCompletion extends AgentRunCompletion {
     readonly partial: boolean;
     readonly generation: number;
   }
+  interface PendingNudge {
+    readonly timer: ReturnType<typeof setTimeout>;
+    readonly completions: readonly HeldCompletion[];
+  }
+  const pendingNudges = new Map<string, PendingNudge>();
   const heldCompletions = new Map<string, HeldCompletion>();
   const NUDGE_HOLD_MS = 200;
   // A queued result wait must observe completion before its held notification
@@ -299,26 +302,94 @@ export default function (pi: ExtensionAPI) {
     readonly outcome: "compacted" | "failed" | "invalidated";
   }
 
-  function scheduleNudge(key: string, send: () => void, delay = NUDGE_HOLD_MS) {
-    cancelNudge(key);
-    pendingNudges.set(key, setTimeout(() => {
-      pendingNudges.delete(key);
-      try { send(); } catch { /* ignore stale completion side-effect errors */ }
-    }, delay));
-  }
-
-  function cancelNudge(key: string) {
-    const timer = pendingNudges.get(key);
-    if (timer != null) {
-      clearTimeout(timer);
-      pendingNudges.delete(key);
+  function clearMatchingPendingRevision({ record, revision }: AgentRunCompletion): void {
+    if (record.pendingDeliveryRevision === revision) {
+      record.pendingDeliveryRevision = undefined;
     }
   }
 
+  function isCurrentCompletion(completion: HeldCompletion): boolean {
+    return completion.record.runRevision === completion.revision
+      && completion.record.pendingDeliveryRevision === completion.revision
+      && completion.record.resultConsumed !== true
+      && completion.generation === sessionGeneration;
+  }
+
+  function scheduleNudge(key: string, completions: readonly HeldCompletion[], delay = NUDGE_HOLD_MS): void {
+    const previous = pendingNudges.get(key);
+    if (previous) {
+      clearTimeout(previous.timer);
+      pendingNudges.delete(key);
+      for (const previousCompletion of previous.completions) {
+        const replaced = completions.some(
+          completion => completion.record.id === previousCompletion.record.id
+            && completion.revision === previousCompletion.revision,
+        );
+        if (!replaced) clearMatchingPendingRevision(previousCompletion);
+      }
+    }
+
+    const current = completions.filter(isCurrentCompletion);
+    for (const completion of completions) {
+      if (!current.includes(completion)) clearMatchingPendingRevision(completion);
+    }
+    if (current.length === 0) return;
+
+    const timer = setTimeout(() => {
+      const pending = pendingNudges.get(key);
+      if (!pending || pending.timer !== timer) return;
+      pendingNudges.delete(key);
+      try { queueCompletionDelivery(pending.completions); } catch { /* ignore stale completion side-effect errors */ }
+    }, delay);
+    pendingNudges.set(key, { timer, completions: current });
+  }
+
+  function discardCompletionDelivery(record: AgentRecord, revision: number): void {
+    currentBatchAgents = currentBatchAgents.filter(
+      completion => completion.id !== record.id || completion.revision !== revision,
+    );
+    groupJoin.consume(record.id, revision);
+    if (record.runRevision === revision) record.groupId = undefined;
+
+    for (const [key, pending] of pendingNudges) {
+      const completions = pending.completions.filter(
+        completion => completion.record.id !== record.id || completion.revision !== revision,
+      );
+      if (completions.length === pending.completions.length) continue;
+      if (completions.length === 0) {
+        clearTimeout(pending.timer);
+        pendingNudges.delete(key);
+      } else {
+        pendingNudges.set(key, { timer: pending.timer, completions });
+      }
+    }
+
+    const held = heldCompletions.get(record.id);
+    if (held?.revision === revision) heldCompletions.delete(record.id);
+    clearMatchingPendingRevision({ record, revision });
+  }
+
   function clearPendingCompletionDelivery(): void {
-    for (const timer of pendingNudges.values()) clearTimeout(timer);
+    for (const pending of pendingNudges.values()) {
+      clearTimeout(pending.timer);
+      for (const completion of pending.completions) clearMatchingPendingRevision(completion);
+    }
     pendingNudges.clear();
+    for (const completion of heldCompletions.values()) clearMatchingPendingRevision(completion);
     heldCompletions.clear();
+    for (const record of manager.listAgents()) {
+      if (!groupJoin.isGrouped(record.id)) continue;
+      clearMatchingPendingRevision({ record, revision: record.runRevision });
+      record.groupId = undefined;
+    }
+    for (const completion of groupJoin.cancelPending()) clearMatchingPendingRevision(completion);
+    for (const completion of currentBatchAgents) {
+      const record = manager.getRecord(completion.id);
+      if (record) clearMatchingPendingRevision({ record, revision: completion.revision });
+    }
+    currentBatchAgents = [];
+    if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
+    batchFinalizeTimer = undefined;
     waitingForBarrier = false;
     heldBarrierId = undefined;
     heldCompactorSessionId = undefined;
@@ -332,7 +403,10 @@ export default function (pi: ExtensionAPI) {
     if (deliveryInProgress || waitingForBarrier || heldCompletions.size === 0 || !ctx?.isIdle()) return;
 
     for (const [id, completion] of heldCompletions) {
-      if (completion.record.resultConsumed || completion.generation !== generation) heldCompletions.delete(id);
+      if (!isCurrentCompletion(completion)) {
+        heldCompletions.delete(id);
+        clearMatchingPendingRevision(completion);
+      }
     }
     if (heldCompletions.size === 0) return;
 
@@ -363,11 +437,12 @@ export default function (pi: ExtensionAPI) {
       // while this is still the same idle parent session.
       if (generation !== sessionGeneration || currentCtx !== ctx || !ctx.isIdle()) return;
 
-      const records = pending.map(({ record }) => record).filter(record => !record.resultConsumed);
+      const deliverable = pending.filter(isCurrentCompletion);
+      const records = deliverable.map(({ record }) => record);
       if (records.length === 0) return;
 
       const notifications = records.map(formatTaskNotification).join("\n\n");
-      const partial = pending.some(completion => completion.partial);
+      const partial = deliverable.some(completion => completion.partial);
       const [first, ...rest] = records;
       const details = buildNotificationDetails(first, 160, agentActivity.get(first.id));
       if (rest.length > 0) {
@@ -383,7 +458,11 @@ export default function (pi: ExtensionAPI) {
         display: true,
         details,
       }, { deliverAs: "followUp", triggerTurn: true });
-      for (const { record } of pending) heldCompletions.delete(record.id);
+      for (const completion of deliverable) {
+        const held = heldCompletions.get(completion.record.id);
+        if (held?.revision === completion.revision) heldCompletions.delete(completion.record.id);
+        clearMatchingPendingRevision(completion);
+      }
     } finally {
       deliveryInProgress = false;
     }
@@ -391,8 +470,10 @@ export default function (pi: ExtensionAPI) {
 
   function queueCompletionDelivery(completions: readonly HeldCompletion[]): void {
     for (const completion of completions) {
-      if (completion.generation === sessionGeneration && !completion.record.resultConsumed) {
+      if (isCurrentCompletion(completion)) {
         heldCompletions.set(completion.record.id, completion);
+      } else {
+        clearMatchingPendingRevision(completion);
       }
     }
     attemptCompletionDelivery();
@@ -413,37 +494,44 @@ export default function (pi: ExtensionAPI) {
     heldParentGeneration = undefined;
     if (payload.outcome === "invalidated") {
       for (const [id, completion] of heldCompletions) {
-        if (completion.generation === parentGeneration) heldCompletions.delete(id);
+        if (
+          completion.generation !== parentGeneration
+          || completion.record.runRevision !== completion.revision
+        ) continue;
+        heldCompletions.delete(id);
+        clearMatchingPendingRevision(completion);
       }
       return;
     }
     attemptCompletionDelivery();
   });
 
-  function sendIndividualNudge(record: AgentRecord) {
+  function sendIndividualNudge(record: AgentRecord, revision: number) {
     const generation = record.parentSessionGeneration ?? sessionGeneration;
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
     fleet.onAgentFinished(record.id);
-    scheduleNudge(record.id, () => queueCompletionDelivery([{ record, partial: false, generation }]));
+    scheduleNudge(record.id, [{ record, revision, partial: false, generation }]);
     widget.update();
   }
 
   // ---- Group join manager ----
   const groupJoin = new GroupJoinManager(
-    (records, partial) => {
-      const completions = records.map(record => ({
+    (completedRuns, partial) => {
+      const completions = completedRuns.map(({ record, revision }) => ({
         record,
+        revision,
         partial,
         generation: record.parentSessionGeneration ?? sessionGeneration,
       }));
-      for (const record of records) {
+      const current = completions.filter(isCurrentCompletion);
+      for (const { record } of current) {
         agentActivity.delete(record.id);
         widget.markFinished(record.id);
         fleet.onAgentFinished(record.id);
       }
-      const groupKey = `group:${records.map(record => record.id).join(",")}`;
-      scheduleNudge(groupKey, () => queueCompletionDelivery(completions));
+      const groupKey = `group:${completions.map(({ record, revision }) => `${record.id}:${revision}`).join(",")}`;
+      scheduleNudge(groupKey, completions);
       widget.update();
     },
     30_000,
@@ -497,8 +585,20 @@ export default function (pi: ExtensionAPI) {
       startedAt: record.startedAt, completedAt: record.completedAt,
     });
 
+    const revision = record.runRevision;
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
+      clearMatchingPendingRevision({ record, revision });
+      agentActivity.delete(record.id);
+      widget.markFinished(record.id);
+      fleet.onAgentFinished(record.id);
+      widget.update();
+      return;
+    }
+
+    record.pendingDeliveryRevision = revision;
+    if ((record.parentSessionGeneration ?? sessionGeneration) !== sessionGeneration) {
+      clearMatchingPendingRevision({ record, revision });
       agentActivity.delete(record.id);
       widget.markFinished(record.id);
       fleet.onAgentFinished(record.id);
@@ -508,14 +608,14 @@ export default function (pi: ExtensionAPI) {
 
     // If this agent is pending batch finalization (debounce window still open),
     // don't send an individual nudge — finalizeBatch will pick it up retroactively.
-    if (currentBatchAgents.some(a => a.id === record.id)) {
+    if (currentBatchAgents.some(a => a.id === record.id && a.revision === revision)) {
       widget.update();
       return;
     }
 
-    const result = groupJoin.onAgentComplete(record);
+    const result = groupJoin.onAgentComplete({ record, revision });
     if (result === 'pass') {
-      sendIndividualNudge(record);
+      sendIndividualNudge(record, revision);
     }
     // 'held' → do nothing, group will fire later
     // 'delivered' → group callback already fired
@@ -751,7 +851,7 @@ export default function (pi: ExtensionAPI) {
   // Uses a debounced timer: each new agent resets the 100ms window so that all
   // parallel tool calls (which may be dispatched across multiple microtasks by the
   // framework) are captured in the same batch.
-  let currentBatchAgents: { id: string; joinMode: JoinMode }[] = [];
+  let currentBatchAgents: { id: string; joinMode: JoinMode; revision: number }[] = [];
   let batchFinalizeTimer: ReturnType<typeof setTimeout> | undefined;
   let batchCounter = 0;
 
@@ -764,26 +864,37 @@ export default function (pi: ExtensionAPI) {
     const smartAgents = batchAgents.filter(a => a.joinMode === 'smart' || a.joinMode === 'group');
     if (smartAgents.length >= 2) {
       const groupId = `batch-${++batchCounter}`;
-      const ids = smartAgents.map(a => a.id);
-      groupJoin.registerGroup(groupId, ids);
+      const completions = smartAgents.flatMap(({ id, revision }) => {
+        const record = manager.getRecord(id);
+        return record?.runRevision === revision ? [{ record, revision }] : [];
+      });
+      groupJoin.registerGroup(groupId, completions);
       // Retroactively process agents that already completed during the debounce window.
       // Their onComplete fired but was deferred (agent was in currentBatchAgents),
       // so we feed them into the group now.
-      for (const id of ids) {
-        const record = manager.getRecord(id);
-        if (!record) continue;
+      for (const completion of completions) {
+        const { record, revision } = completion;
         record.groupId = groupId;
-        if (record.completedAt != null && !record.resultConsumed) {
-          groupJoin.onAgentComplete(record);
+        if (
+          record.completedAt != null
+          && !record.resultConsumed
+          && record.pendingDeliveryRevision === revision
+        ) {
+          groupJoin.onAgentComplete(completion);
         }
       }
     } else {
       // No group formed — send individual nudges for any agents that completed
       // during the debounce window and had their notification deferred.
-      for (const { id } of batchAgents) {
+      for (const { id, revision } of batchAgents) {
         const record = manager.getRecord(id);
-        if (record?.completedAt != null && !record.resultConsumed) {
-          sendIndividualNudge(record);
+        if (
+          record?.runRevision === revision
+          && record.completedAt != null
+          && !record.resultConsumed
+          && record.pendingDeliveryRevision === revision
+        ) {
+          sendIndividualNudge(record, revision);
         }
       }
     }
@@ -1323,8 +1434,15 @@ Terse command-style prompts produce shallow, generic work.
         if (existing.status === "running" || existing.status === "queued") {
           return textResult(`Agent "${params.resume}" is already ${existing.status}. Wait for it to finish before resuming it.`);
         }
+        if (
+          existing.resultConsumed !== true
+          || existing.pendingDeliveryRevision === existing.runRevision
+        ) {
+          return textResult(
+            `Agent "${params.resume}" has an unconsumed completed run. Use get_subagent_result before resuming it.`,
+          );
+        }
 
-        existing.resultConsumed = false;
         const resumed = manager.resumeInBackground(params.resume, params.prompt);
         if (!resumed) {
           return textResult(`Agent "${params.resume}" has no active session to resume.`);
@@ -1389,7 +1507,7 @@ Terse command-style prompts produce shallow, generic work.
           // Foreground/no join mode or explicit async — not part of any batch
         } else {
           // smart or group — add to current batch
-          currentBatchAgents.push({ id, joinMode });
+          currentBatchAgents.push({ id, joinMode, revision: record?.runRevision ?? 1 });
           // Debounce: reset timer on each new agent so parallel tool calls
           // dispatched across multiple event loop ticks are captured together
           if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
@@ -1457,6 +1575,7 @@ Terse command-style prompts produce shallow, generic work.
       if (!record || record.parentAgentId) {
         return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
       }
+      const revision = record.runRevision;
 
       // Wait for completion if requested. Cancellation stops only this tool
       // call; the background agent keeps running and remains unconsumed so its
@@ -1496,10 +1615,14 @@ Terse command-style prompts produce shallow, generic work.
         output += record.result?.trim() || "No output.";
       }
 
-      // Mark result as consumed — suppresses the completion notification
-      if (record.status !== "running" && record.status !== "queued") {
+      // Mark only this run as consumed and remove it from every delivery path.
+      if (
+        record.runRevision === revision
+        && record.status !== "running"
+        && record.status !== "queued"
+      ) {
         record.resultConsumed = true;
-        cancelNudge(params.agent_id);
+        discardCompletionDelivery(record, revision);
       }
 
       // Verbose: include full conversation

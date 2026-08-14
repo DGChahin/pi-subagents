@@ -179,6 +179,16 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
+        if (
+          existing.status !== "running"
+          && existing.status !== "queued"
+          && (
+            existing.resultConsumed !== true
+            || existing.pendingDeliveryRevision === existing.runRevision
+          )
+        ) {
+          return textResult(`Retrieve nested agent "${params.resume}" before resuming it.`, true);
+        }
         const resumed = await context.manager.resume(params.resume, params.prompt, signal);
         return resumed
           ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
@@ -360,6 +370,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       if (!ownsRecord(record, context.parentAgentId)) {
         return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
       }
+      const revision = record.runRevision;
       // Wait for completion if requested. Cancellation (e.g. the parent's tool
       // call is aborted) stops only this wait; the nested child keeps running and
       // stays unconsumed. Queued records have no promise until the manager starts
@@ -370,7 +381,15 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         }
         if (record.promise) await abortable(record.promise, signal);
       }
-      return textResult(formatRecord(record, "fetched"), record.status === "error");
+      const result = textResult(formatRecord(record, "fetched"), record.status === "error");
+      if (
+        record.runRevision === revision
+        && record.status !== "running"
+        && record.status !== "queued"
+      ) {
+        record.resultConsumed = true;
+      }
+      return result;
     },
   });
 
