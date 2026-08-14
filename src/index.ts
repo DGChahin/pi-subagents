@@ -57,8 +57,12 @@ import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsag
 // ---- Shared helpers ----
 
 /** Tool execute return value for a text response. */
-function textResult(msg: string, details?: AgentDetails) {
-  return { content: [{ type: "text" as const, text: msg }], details: details as any };
+function textResult(msg: string, details?: AgentDetails, terminate = false) {
+  return {
+    content: [{ type: "text" as const, text: msg }],
+    details: details as any,
+    ...(terminate ? { terminate: true as const } : {}),
+  };
 }
 
 export function renderRunningAgentStatus(
@@ -151,20 +155,9 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Format a structured task notification matching Claude Code's <task-notification> XML. */
-function formatTaskNotification(record: AgentRecord, resultMaxLen: number): string {
+/** Format a concise callback; full output stays in package state for explicit retrieval. */
+function formatTaskNotification(record: AgentRecord): string {
   const status = getStatusLabel(record.status, record.error);
-  const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
-  const totalTokens = getLifetimeTotal(record.lifetimeUsage);
-  const contextPercent = getSessionContextPercent(record.session);
-  const ctxXml = contextPercent !== null ? `<context_percent>${Math.round(contextPercent)}</context_percent>` : "";
-  const compactXml = record.compactionCount ? `<compactions>${record.compactionCount}</compactions>` : "";
-
-  const resultPreview = record.result
-    ? record.result.length > resultMaxLen
-      ? record.result.slice(0, resultMaxLen) + "\n...(truncated, use get_subagent_result for full output)"
-      : record.result
-    : "No output.";
 
   return [
     `<task-notification>`,
@@ -173,8 +166,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
-    `<result>${escapeXml(resultPreview)}</result>`,
-    `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}<duration_ms>${durationMs}</duration_ms></usage>`,
+    `<result>Stored. Use get_subagent_result with task-id for full output.</result>`,
     `</task-notification>`,
   ].filter(Boolean).join('\n');
 }
@@ -291,13 +283,33 @@ export default function (pi: ExtensionAPI) {
   const agentActivity = new Map<string, AgentActivity>();
 
   // ---- Cancellable pending notifications ----
-  // Holds notifications briefly so get_subagent_result can cancel them
-  // before they reach pi.sendMessage (fire-and-forget).
+  // Holds notifications briefly so get_subagent_result can cancel them before
+  // delivery. A claimed compaction barrier keeps them out of Pi's pending queue.
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
+  const heldCompletions = new Map<string, { record: AgentRecord; partial: boolean; generation: number }>();
+  const agentGenerations = new Map<string, number>();
   const NUDGE_HOLD_MS = 200;
+  const MAX_COMPLETIONS_PER_CALLBACK = 20;
   // A queued result wait must observe completion before its held notification
   // can fire, so successful waits can still suppress that redundant nudge.
   const QUEUE_WAIT_POLL_MS = Math.floor(NUDGE_HOLD_MS / 4);
+  let currentCtx: ExtensionContext | undefined;
+  let sessionGeneration = 0;
+  let waitingForBarrier = false;
+  let heldBarrierId: number | undefined;
+  let deliveryInProgress = false;
+
+  interface BeforeContinuationPayload {
+    hold: boolean;
+    readonly willRestartParent: true;
+    claimedBy?: "context-compact";
+    barrierId?: number;
+  }
+
+  interface BarrierOpenPayload {
+    readonly barrierId: number;
+    readonly outcome: "compacted" | "failed" | "invalidated";
+  }
 
   function scheduleNudge(key: string, send: () => void, delay = NUDGE_HOLD_MS) {
     cancelNudge(key);
@@ -315,58 +327,110 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // ---- Individual nudge helper (async join mode) ----
-  function emitIndividualNudge(record: AgentRecord) {
-    if (record.resultConsumed) return;  // re-check at send time
-
-    const notification = formatTaskNotification(record, 500);
-    const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
-
-    pi.sendMessage<NotificationDetails>({
-      customType: "subagent-notification",
-      content: notification + footer,
-      display: true,
-      details: buildNotificationDetails(record, 500, agentActivity.get(record.id)),
-    }, { deliverAs: "followUp", triggerTurn: true });
+  function clearPendingCompletionDelivery(): void {
+    for (const timer of pendingNudges.values()) clearTimeout(timer);
+    pendingNudges.clear();
+    heldCompletions.clear();
+    waitingForBarrier = false;
+    heldBarrierId = undefined;
   }
 
+  function attemptCompletionDelivery(): void {
+    const ctx = currentCtx;
+    const generation = sessionGeneration;
+    if (deliveryInProgress || waitingForBarrier || heldCompletions.size === 0 || !ctx?.isIdle()) return;
+
+    for (const [id, completion] of heldCompletions) {
+      if (completion.record.resultConsumed || completion.generation !== generation) heldCompletions.delete(id);
+    }
+    if (heldCompletions.size === 0) return;
+
+    deliveryInProgress = true;
+    try {
+      const pending = [...heldCompletions.values()];
+      const batch = pending.slice(0, MAX_COMPLETIONS_PER_CALLBACK);
+      const payload: BeforeContinuationPayload = {
+        hold: false,
+        willRestartParent: true,
+      };
+      pi.events.emit("context-compact:before-continuation", payload);
+      if (payload.hold) {
+        waitingForBarrier = true;
+        heldBarrierId = Number.isInteger(payload.barrierId) ? payload.barrierId : undefined;
+        return;
+      }
+
+      // Event listeners can synchronously start work. Delivery is valid only
+      // while this is still the same idle parent session.
+      if (generation !== sessionGeneration || currentCtx !== ctx || !ctx.isIdle()) return;
+
+      const records = batch.map(({ record }) => record).filter(record => !record.resultConsumed);
+      if (records.length === 0) return;
+
+      const notifications = records.map(formatTaskNotification).join("\n\n");
+      const partial = pending.some(completion => completion.partial);
+      const omitted = pending.length - records.length;
+      const [first, ...rest] = records;
+      const details = buildNotificationDetails(first, 160, agentActivity.get(first.id));
+      if (rest.length > 0) {
+        details.others = rest.map(record => buildNotificationDetails(record, 160, agentActivity.get(record.id)));
+      }
+      const label = partial
+        ? `${pending.length} agent(s) finished; other grouped agents are still running`
+        : `${pending.length} agent(s) finished`;
+      const overflowNote = omitted > 0
+        ? `\n\n${omitted} additional completion(s) are stored. Use get_subagent_result with their agent IDs.`
+        : "";
+
+      pi.sendMessage<NotificationDetails>({
+        customType: "subagent-notification",
+        content: `Background agent completion: ${label}\n\n${notifications}${overflowNote}`,
+        display: true,
+        details,
+      }, { deliverAs: "followUp", triggerTurn: true });
+      for (const { record } of pending) heldCompletions.delete(record.id);
+    } finally {
+      deliveryInProgress = false;
+    }
+  }
+
+  function queueCompletionDelivery(records: AgentRecord[], partial: boolean, generation: number): void {
+    if (generation !== sessionGeneration) return;
+    for (const record of records) {
+      if (!record.resultConsumed) heldCompletions.set(record.id, { record, partial, generation });
+    }
+    attemptCompletionDelivery();
+  }
+
+  const unsubscribeBarrierOpen = pi.events.on("context-compact:barrier-open", (payload: BarrierOpenPayload) => {
+    if (!waitingForBarrier || payload.barrierId !== heldBarrierId) return;
+    waitingForBarrier = false;
+    heldBarrierId = undefined;
+    attemptCompletionDelivery();
+  });
+
   function sendIndividualNudge(record: AgentRecord) {
+    const generation = agentGenerations.get(record.id) ?? sessionGeneration;
+    agentGenerations.delete(record.id);
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
     fleet.onAgentFinished(record.id);
-    scheduleNudge(record.id, () => emitIndividualNudge(record));
+    scheduleNudge(record.id, () => queueCompletionDelivery([record], false, generation));
     widget.update();
   }
 
   // ---- Group join manager ----
   const groupJoin = new GroupJoinManager(
     (records, partial) => {
-      for (const r of records) { agentActivity.delete(r.id); widget.markFinished(r.id); fleet.onAgentFinished(r.id); }
-
-      const groupKey = `group:${records.map(r => r.id).join(",")}`;
-      scheduleNudge(groupKey, () => {
-        // Re-check at send time
-        const unconsumed = records.filter(r => !r.resultConsumed);
-        if (unconsumed.length === 0) { widget.update(); return; }
-
-        const notifications = unconsumed.map(r => formatTaskNotification(r, 300)).join('\n\n');
-        const label = partial
-          ? `${unconsumed.length} agent(s) finished (partial — others still running)`
-          : `${unconsumed.length} agent(s) finished`;
-
-        const [first, ...rest] = unconsumed;
-        const details = buildNotificationDetails(first, 300, agentActivity.get(first.id));
-        if (rest.length > 0) {
-          details.others = rest.map(r => buildNotificationDetails(r, 300, agentActivity.get(r.id)));
-        }
-
-        pi.sendMessage<NotificationDetails>({
-          customType: "subagent-notification",
-          content: `Background agent group completed: ${label}\n\n${notifications}\n\nUse get_subagent_result for full output.`,
-          display: true,
-          details,
-        }, { deliverAs: "followUp", triggerTurn: true });
-      });
+      const generation = agentGenerations.get(records[0]?.id ?? "") ?? sessionGeneration;
+      for (const record of records) {
+        agentGenerations.delete(record.id);
+        agentActivity.delete(record.id);
+        widget.markFinished(record.id);
+        fleet.onAgentFinished(record.id);
+      }
+      const groupKey = `group:${records.map(record => record.id).join(",")}`;
+      scheduleNudge(groupKey, () => queueCompletionDelivery(records, partial, generation));
       widget.update();
     },
     30_000,
@@ -397,8 +461,9 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  // Background completion: route through group join or send individual nudge
-  const manager = new AgentManager((record) => {
+  // Background completion: route through group join or send individual nudge.
+  // Resumed top-level runs use the same completion path after their async turn settles.
+  function handleAgentComplete(record: AgentRecord): void {
     // Nested children report only through their owning parent's scoped tools.
     // Keep them out of top-level lifecycle, transcript, notification, and UI channels.
     if (record.parentAgentId) return;
@@ -421,6 +486,7 @@ export default function (pi: ExtensionAPI) {
 
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
+      agentGenerations.delete(record.id);
       agentActivity.delete(record.id);
       widget.markFinished(record.id);
       fleet.onAgentFinished(record.id);
@@ -442,8 +508,11 @@ export default function (pi: ExtensionAPI) {
     // 'held' → do nothing, group will fire later
     // 'delivered' → group callback already fired
     widget.update();
-  }, undefined, (record) => {
+  }
+
+  const manager = new AgentManager(handleAgentComplete, undefined, (record) => {
     if (record.parentAgentId) return;
+    agentGenerations.set(record.id, sessionGeneration);
     // Emit started event when agent transitions to running (including from queue)
     pi.events.emit("subagents:started", {
       id: record.id,
@@ -509,7 +578,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   // --- Cross-extension RPC via pi.events ---
-  let currentCtx: ExtensionContext | undefined;
   // RPC handlers + the `subagents:ready` broadcast are wired on `session_start`
   // (a bound lifecycle event), not at factory time. pi runs every extension
   // factory before the `extensions:` filter and only fires lifecycle events for
@@ -544,6 +612,8 @@ export default function (pi: ExtensionAPI) {
   // This also wires the RPC handlers and broadcasts readiness — on the first
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
+    sessionGeneration += 1;
+    clearPendingCompletionDelivery();
     currentCtx = ctx;
     manager.clearCompleted(true);
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -570,13 +640,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_before_switch", () => {
+    sessionGeneration += 1;
+    currentCtx = undefined;
+    clearPendingCompletionDelivery();
     manager.clearCompleted(true);
     scheduler.stop();
+  });
+
+  pi.on("agent_settled", () => {
+    attemptCompletionDelivery();
   });
 
   // On shutdown, abort all agents immediately and clean up.
   // If the session is going down, there's nothing left to consume agent results.
   pi.on("session_shutdown", async () => {
+    sessionGeneration += 1;
     rpcHandle?.unsubSpawn();
     rpcHandle?.unsubStop();
     rpcHandle?.unsubPing();
@@ -589,8 +667,9 @@ export default function (pi: ExtensionAPI) {
     }
     scheduler.stop();
     manager.abortAll();
-    for (const timer of pendingNudges.values()) clearTimeout(timer);
-    pendingNudges.clear();
+    clearPendingCompletionDelivery();
+    agentGenerations.clear();
+    unsubscribeBarrierOpen();
     fleet.dispose();
     manager.dispose();
   });
@@ -800,9 +879,11 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
+- Agent calls run in background by default and return an ID immediately. Omit run_in_background; false is rejected.
+- Successful dispatch results terminate the parent only when every finalized result in the parallel tool batch is terminating. Rejections keep the parent active for correction.
+- Parallel work: one message with multiple Agent calls. Completion callbacks wait for parent idle, stay concise, and can be delayed by compaction; use get_subagent_result for full stored output.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
+- resume continues a previous agent in background and returns the same ID; steer_subagent messages a running one.
 - isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
@@ -821,12 +902,12 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 ## Usage notes
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
-- When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
-- When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
+- Agent calls run in background by default and return an agent ID immediately. Omit run_in_background; an explicit false is rejected. When you launch multiple independent agents, send all tool calls in one message so they run concurrently.
+- Successful Agent dispatches terminate the parent only when every finalized tool result in that parallel batch is terminating. A rejected dispatch keeps the parent active so it can correct the call.
+- When an agent is done, you receive one concise callback after the parent is idle and any compaction barrier opens. Use get_subagent_result for full stored output, then summarize relevant results for the user.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
-- Use run_in_background for work you don't need immediately. You will be notified when it completes — do NOT poll or sleep waiting for it. Continue with other work or respond to the user instead.
-- Foreground vs background: use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.
-- Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
+- You will be notified when background work completes — do NOT poll or sleep. Continue other work or respond to the user. Use get_subagent_result when you need the stored details.
+- Use resume with an agent ID to continue its stored session in background; the call returns the same ID immediately. A fresh Agent call starts with no memory of prior runs, so its prompt must be self-contained.
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
@@ -903,7 +984,7 @@ Terse command-style prompts produce shallow, generic work.
     promptGuidelines: [
       "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
       "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
-      "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
+      "Agent calls run in the background by default. Completion callbacks are concise; use get_subagent_result for stored details. Do not poll or sleep while an agent runs.",
       "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
     ],
     parameters: Type.Object({
@@ -935,12 +1016,12 @@ Terse command-style prompts produce shallow, generic work.
       ),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Set to true to run in background. Returns agent ID immediately. You will be notified on completion.",
+          description: "Background execution is the default. Omit this field or set true. Explicit false is rejected.",
         }),
       ),
       resume: Type.Optional(
         Type.String({
-          description: "Optional agent ID to resume from. Continues from previous context.",
+          description: "Optional agent ID to resume asynchronously from its previous context. Returns the same ID immediately.",
         }),
       ),
       isolated: Type.Optional(
@@ -1089,7 +1170,10 @@ Terse command-style prompts produce shallow, generic work.
       // Get agent config (if any)
       const customConfig = getAgentConfig(subagentType);
 
-      const resolvedConfig = resolveAgentInvocationConfig(customConfig, params);
+      const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, true);
+      if (params.run_in_background === false || (!params.resume && !resolvedConfig.runInBackground)) {
+        return textResult("Foreground Agent execution is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.");
+      }
 
       // Resolve model from agent config first; tool-call params only fill gaps.
       let model = ctx.model;
@@ -1200,13 +1284,16 @@ Terse command-style prompts produce shallow, generic work.
             `${fallbackNote}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
             `Next run: ${next ?? "(unknown)"}. ` +
             `Manage via /agents → Scheduled jobs.`,
+            undefined,
+            true,
           );
         } catch (err) {
           return textResult(err instanceof Error ? err.message : String(err));
         }
       }
 
-      // Resume existing agent
+      // Resume existing agent in background. It keeps the historical resume
+      // execution path, but no longer blocks the parent Agent tool call.
       if (params.resume) {
         const existing = manager.getRecord(params.resume);
         if (!existing || existing.parentAgentId) {
@@ -1215,18 +1302,24 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing.session) {
           return textResult(`Agent "${params.resume}" has no active session to resume.`);
         }
-        const record = await manager.resume(params.resume, params.prompt, signal);
-        if (!record) {
-          return textResult(`Failed to resume agent "${params.resume}".`);
-        }
-        // A failed resume surfaces the error, plus any partial output THIS
-        // resume produced (never the previous turn's answer, #144).
-        if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBase, record));
-        }
+
+        existing.resultConsumed = false;
+        agentGenerations.set(existing.id, sessionGeneration);
+        const resumePromise = manager.resume(params.resume, params.prompt);
+        existing.promise = resumePromise.then(record => record?.result ?? "");
+        pi.events.emit("subagents:started", {
+          id: existing.id,
+          type: existing.type,
+          description: existing.description,
+        });
+        void resumePromise.then(record => {
+          if (record) handleAgentComplete(record);
+        });
+
         return textResult(
-          record.result?.trim() || "No output.",
-          buildDetails(detailBase, record),
+          `Agent resumed in background.\nAgent ID: ${existing.id}\n\nYou will receive a concise completion callback. Use get_subagent_result for full stored output.`,
+          { ...detailBase, toolUses: existing.toolUses, tokens: formatLifetimeTokens(existing), durationMs: 0, status: "background" as const, agentId: existing.id },
+          true,
         );
       }
 
@@ -1312,6 +1405,7 @@ Terse command-style prompts produce shallow, generic work.
           `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
           `Do not duplicate this agent's work.`,
           { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
+          true,
         );
       }
 
@@ -1435,7 +1529,7 @@ Terse command-style prompts produce shallow, generic work.
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background.",
+      "Check status and retrieve stored output from a background agent. Use the agent ID returned by Agent.",
     promptSnippet: "Check status and retrieve results from a background agent",
     parameters: Type.Object({
       agent_id: Type.String({
@@ -2009,7 +2103,7 @@ extensions: <true (inherit all MCP/extension tools), false (none), or comma-sepa
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
 disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit for none>
 inherit_context: <true to fork parent conversation into agent so it sees chat history. Default: false>
-run_in_background: <true to run in background by default. Default: false>
+run_in_background: <true to run in background. Fresh top-level default: true; false rejects fresh top-level starts. Nested behavior is unchanged>
 output_transcript: <false to write no transcript file or path for this agent. Independent of persist_session. Default: true>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
