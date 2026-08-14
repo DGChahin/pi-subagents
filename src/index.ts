@@ -31,14 +31,13 @@ import { createOutputFilePath, getOutputTranscriptDefault, setOutputTranscriptDe
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type WidgetMode } from "./types.js";
 import {
   type AgentActivity,
   type AgentDetails,
   AgentWidget,
   buildInvocationTags,
-  describeActivity,
   fgPreservingNestedStyles,
   formatDuration,
   formatMs,
@@ -171,27 +170,6 @@ function formatTaskNotification(record: AgentRecord): string {
   ].filter(Boolean).join('\n');
 }
 
-/** Build AgentDetails from a base + record-specific fields. */
-function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
-  record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; lifetimeUsage: LifetimeUsage },
-  activity?: AgentActivity,
-  overrides?: Partial<AgentDetails>,
-): AgentDetails {
-  return {
-    ...base,
-    toolUses: record.toolUses,
-    tokens: formatLifetimeTokens(record),
-    turnCount: activity?.turnCount,
-    maxTurns: activity?.maxTurns,
-    durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
-    status: record.status as AgentDetails["status"],
-    agentId: record.id,
-    error: record.error,
-    ...overrides,
-  };
-}
-
 /** Build notification details for the custom message renderer. */
 function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, activity?: AgentActivity): NotificationDetails {
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
@@ -297,6 +275,9 @@ export default function (pi: ExtensionAPI) {
   let sessionGeneration = 0;
   let waitingForBarrier = false;
   let heldBarrierId: number | undefined;
+  let heldCompactorSessionId: string | undefined;
+  let heldCompactorGeneration: number | undefined;
+  let heldParentGeneration: number | undefined;
   let deliveryInProgress = false;
 
   interface BeforeContinuationPayload {
@@ -304,10 +285,14 @@ export default function (pi: ExtensionAPI) {
     readonly willRestartParent: true;
     claimedBy?: "context-compact";
     barrierId?: number;
+    sessionId?: string;
+    generation?: number;
   }
 
   interface BarrierOpenPayload {
     readonly barrierId: number;
+    readonly sessionId: string;
+    readonly generation: number;
     readonly outcome: "compacted" | "failed" | "invalidated";
   }
 
@@ -333,6 +318,9 @@ export default function (pi: ExtensionAPI) {
     heldCompletions.clear();
     waitingForBarrier = false;
     heldBarrierId = undefined;
+    heldCompactorSessionId = undefined;
+    heldCompactorGeneration = undefined;
+    heldParentGeneration = undefined;
   }
 
   function attemptCompletionDelivery(): void {
@@ -354,9 +342,17 @@ export default function (pi: ExtensionAPI) {
         willRestartParent: true,
       };
       pi.events.emit("context-compact:before-continuation", payload);
-      if (payload.hold) {
+      if (
+        payload.hold
+        && Number.isInteger(payload.barrierId)
+        && typeof payload.sessionId === "string"
+        && Number.isInteger(payload.generation)
+      ) {
         waitingForBarrier = true;
-        heldBarrierId = Number.isInteger(payload.barrierId) ? payload.barrierId : undefined;
+        heldBarrierId = payload.barrierId;
+        heldCompactorSessionId = payload.sessionId;
+        heldCompactorGeneration = payload.generation;
+        heldParentGeneration = generation;
         return;
       }
 
@@ -403,9 +399,24 @@ export default function (pi: ExtensionAPI) {
   }
 
   const unsubscribeBarrierOpen = pi.events.on("context-compact:barrier-open", (payload: BarrierOpenPayload) => {
-    if (!waitingForBarrier || payload.barrierId !== heldBarrierId) return;
+    if (
+      !waitingForBarrier
+      || payload.barrierId !== heldBarrierId
+      || payload.sessionId !== heldCompactorSessionId
+      || payload.generation !== heldCompactorGeneration
+    ) return;
+    const parentGeneration = heldParentGeneration;
     waitingForBarrier = false;
     heldBarrierId = undefined;
+    heldCompactorSessionId = undefined;
+    heldCompactorGeneration = undefined;
+    heldParentGeneration = undefined;
+    if (payload.outcome === "invalidated") {
+      for (const [id, completion] of heldCompletions) {
+        if (completion.generation === parentGeneration) heldCompletions.delete(id);
+      }
+      return;
+    }
     attemptCompletionDelivery();
   });
 
@@ -1132,7 +1143,7 @@ Terse command-style prompts produce shallow, generic work.
 
     // ---- Execute ----
 
-    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+    execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
       // Ensure we have UI context for widget rendering
       widget.setUICtx(ctx.ui as UICtx);
 
@@ -1171,7 +1182,12 @@ Terse command-style prompts produce shallow, generic work.
       const customConfig = getAgentConfig(subagentType);
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, true);
-      if (params.run_in_background === false || (!params.resume && !resolvedConfig.runInBackground)) {
+      if (params.run_in_background === false) {
+        return textResult(params.schedule
+          ? "Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background."
+          : "Foreground Agent execution is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.");
+      }
+      if (!params.resume && !params.schedule && !resolvedConfig.runInBackground) {
         return textResult("Foreground Agent execution is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.");
       }
 
@@ -1258,9 +1274,6 @@ Terse command-style prompts produce shallow, generic work.
         if (params.inherit_context) {
           return textResult("Cannot combine `schedule` with `inherit_context` — there is no parent conversation at fire time.");
         }
-        if (params.run_in_background === false) {
-          return textResult("Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background.");
-        }
         if (!scheduler.isActive()) {
           return textResult("Scheduler is not active in this session yet. Try again after the session has fully started.");
         }
@@ -1292,8 +1305,8 @@ Terse command-style prompts produce shallow, generic work.
         }
       }
 
-      // Resume existing agent in background. It keeps the historical resume
-      // execution path, but no longer blocks the parent Agent tool call.
+      // Resume existing agent through the background queue. The manager keeps
+      // the same record ID and owns start/completion callbacks and pool slots.
       if (params.resume) {
         const existing = manager.getRecord(params.resume);
         if (!existing || existing.parentAgentId) {
@@ -1302,29 +1315,28 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing.session) {
           return textResult(`Agent "${params.resume}" has no active session to resume.`);
         }
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(`Agent "${params.resume}" is already ${existing.status}. Wait for it to finish before resuming it.`);
+        }
 
         existing.resultConsumed = false;
-        agentGenerations.set(existing.id, sessionGeneration);
-        const resumePromise = manager.resume(params.resume, params.prompt);
-        existing.promise = resumePromise.then(record => record?.result ?? "");
-        pi.events.emit("subagents:started", {
-          id: existing.id,
-          type: existing.type,
-          description: existing.description,
-        });
-        void resumePromise.then(record => {
-          if (record) handleAgentComplete(record);
-        });
+        const resumed = manager.resumeInBackground(params.resume, params.prompt);
+        if (!resumed) {
+          return textResult(`Agent "${params.resume}" has no active session to resume.`);
+        }
+        const isQueued = resumed.status === "queued";
 
         return textResult(
-          `Agent resumed in background.\nAgent ID: ${existing.id}\n\nYou will receive a concise completion callback. Use get_subagent_result for full stored output.`,
+          `Agent ${isQueued ? "resume queued" : "resumed"} in background.\nAgent ID: ${existing.id}` +
+          (isQueued ? `\nPosition: queued (max ${manager.getMaxConcurrent()} concurrent)` : "") +
+          `\n\nYou will receive a concise completion callback. Use get_subagent_result for full stored output.`,
           { ...detailBase, toolUses: existing.toolUses, tokens: formatLifetimeTokens(existing), durationMs: 0, status: "background" as const, agentId: existing.id },
           true,
         );
       }
 
-      // Background execution
-      if (runInBackground) {
+      // Fresh execution reaches this point only when background mode is enabled.
+      {
         const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
 
         // Wrap onSessionCreated to wire output file streaming.
@@ -1409,117 +1421,6 @@ Terse command-style prompts produce shallow, generic work.
         );
       }
 
-      // Foreground (synchronous) execution — stream progress via onUpdate
-      let spinnerFrame = 0;
-      const startedAt = Date.now();
-      let fgId: string | undefined;
-
-      const streamUpdate = () => {
-        const details: AgentDetails = {
-          ...detailBase,
-          toolUses: fgState.toolUses,
-          tokens: formatLifetimeTokens(fgState),
-          turnCount: fgState.turnCount,
-          maxTurns: fgState.maxTurns,
-          durationMs: Date.now() - startedAt,
-          status: "running",
-          activity: describeActivity(fgState.activeTools, fgState.responseText),
-          spinnerFrame: spinnerFrame % SPINNER.length,
-        };
-        onUpdate?.({
-          content: [{ type: "text", text: `${fgState.toolUses} tool uses...` }],
-          details: details as any,
-        });
-      };
-
-      const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(effectiveMaxTurns, streamUpdate);
-
-      // Wire session creation: register in widget + stream to output file.
-      // The output file path is set synchronously after spawn (below),
-      // before onSessionCreated fires — same pattern as background agents.
-      const origOnSession = fgCallbacks.onSessionCreated;
-      fgCallbacks.onSessionCreated = (session: any) => {
-        origOnSession(session);
-        for (const a of manager.listAgents()) {
-          if (a.session === session) {
-            fgId = a.id;
-            agentActivity.set(a.id, fgState);
-            widget.ensureTimer();
-            fleet.ensureTimer();
-            fleet.update();
-            break;
-          }
-        }
-        // Stream conversation to output file (foreground agent logging)
-        if (fgId) {
-          const rec = manager.getRecord(fgId);
-          if (rec?.outputFile) {
-            rec.outputCleanup = streamToOutputFile(session, rec.outputFile, fgId, ctx.cwd);
-          }
-        }
-      };
-
-      // Animate spinner at ~80ms (smooth rotation through 10 braille frames)
-      const spinnerInterval = setInterval(() => {
-        spinnerFrame++;
-        streamUpdate();
-      }, 80);
-
-      streamUpdate();
-
-      let record: AgentRecord;
-      try {
-        const fgResult = await manager.spawnAndWait(pi, ctx, subagentType, params.prompt, {
-          description: params.description,
-          model,
-          maxTurns: effectiveMaxTurns,
-          isolated,
-          inheritContext,
-          thinkingLevel: thinking,
-          isolation,
-          invocation: agentInvocation,
-          signal,
-          rootSessionId: ctx.sessionManager.getSessionId(),
-          ...fgCallbacks,
-        }, (fgAgentId) => {
-          // onSpawned: called synchronously after spawn, before onSessionCreated fires.
-          // Set up the output file so streamToOutputFile can pick it up.
-          const fgRec = manager.getRecord(fgAgentId);
-          attachTranscript(fgRec, fgAgentId);
-        });
-        record = fgResult.record;
-      } catch (err) {
-        clearInterval(spinnerInterval);
-        return textResult(err instanceof Error ? err.message : String(err));
-      }
-
-      clearInterval(spinnerInterval);
-
-      // Clean up foreground agent from widget
-      if (fgId) {
-        agentActivity.delete(fgId);
-        widget.markFinished(fgId);
-        fleet.onAgentFinished(fgId);
-      }
-
-      // Get final token count
-      const tokenText = formatLifetimeTokens(fgState);
-
-      const details = buildDetails(detailBase, record, fgState, { tokens: tokenText });
-
-      if (record.status === "error") {
-        // Error headline + any partial output the run produced before failing.
-        return textResult(`${fallbackNote}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
-      }
-
-      const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
-      const statsParts = [`${record.toolUses} tool uses`];
-      if (tokenText) statsParts.push(tokenText);
-      return textResult(
-        `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
-        (record.result?.trim() || "No output."),
-        details,
-      );
     },
   }));
 

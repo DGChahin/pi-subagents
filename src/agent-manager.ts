@@ -68,6 +68,10 @@ interface SpawnArgs {
   options: SpawnOptions;
 }
 
+type QueueEntry =
+  | { kind: "spawn"; id: string; args: SpawnArgs }
+  | { kind: "resume"; id: string; prompt: string };
+
 interface SpawnOptions {
   description: string;
   model?: Model<any>;
@@ -132,8 +136,8 @@ export class AgentManager {
    *  not just the parent repo (caller-supplied cwd can target other repos). */
   private worktreeRepos = new Set<string>();
 
-  /** Queue of background agents waiting to start. */
-  private queue: { id: string; args: SpawnArgs }[] = [];
+  /** Queue of background agents and resumed turns waiting to start. */
+  private queue: QueueEntry[] = [];
   /** Number of currently running background agents. */
   private runningBackground = 0;
 
@@ -209,7 +213,7 @@ export class AgentManager {
 
     if (occupiesPoolSlot(record) && !options.bypassQueue && this.runningBackground >= this.maxConcurrent) {
       // Queue it — will be started when a running agent completes
-      this.queue.push({ id, args });
+      this.queue.push({ kind: "spawn", id, args });
       return id;
     }
 
@@ -434,12 +438,16 @@ export class AgentManager {
     }
   }
 
-  /** Start queued agents up to the concurrency limit. */
+  /** Start queued agents and resumed turns up to the concurrency limit. */
   private drainQueue() {
     while (this.queue.length > 0 && this.runningBackground < this.maxConcurrent) {
       const next = this.queue.shift()!;
       const record = this.agents.get(next.id);
       if (!record || record.status !== "queued") continue;
+      if (next.kind === "resume") {
+        this.startBackgroundResume(record, next.prompt);
+        continue;
+      }
       try {
         this.startAgent(next.id, record, next.args);
       } catch (err) {
@@ -493,25 +501,22 @@ export class AgentManager {
     return { id, record };
   }
 
-  /**
-   * Resume an existing agent session with a new prompt.
-   */
-  async resume(
-    id: string,
-    prompt: string,
-    signal?: AbortSignal,
-  ): Promise<AgentRecord | undefined> {
-    const record = this.agents.get(id);
-    if (!record?.session) return undefined;
-
-    record.status = "running";
+  private prepareResume(record: AgentRecord, status: "queued" | "running"): void {
+    record.status = status;
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
+    record.promise = undefined;
+  }
 
+  private async executeResume(
+    record: AgentRecord,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<AgentRecord> {
     try {
-      const { text, failure } = await resumeAgent(record.session, prompt, {
+      const { text, failure } = await resumeAgent(record.session!, prompt, {
         onToolActivity: (activity) => {
           if (activity.type === "end") record.toolUses++;
         },
@@ -526,21 +531,66 @@ export class AgentManager {
       });
       // Same contract as the spawn path (#144): a failed final turn is an
       // error, not a completion — but the resumed text stays available.
-      record.status = failure ? "error" : "completed";
-      if (failure) record.error = failure;
+      if (record.status !== "stopped") {
+        record.status = failure ? "error" : "completed";
+        if (failure) record.error = failure;
+      }
       record.result = text;
       record.completedAt = Date.now();
     } catch (err) {
-      record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
+      if (record.status !== "stopped") {
+        record.status = "error";
+        record.error = err instanceof Error ? err.message : String(err);
+      }
       record.completedAt = Date.now();
     }
 
     // Same contract as the spawn settle paths: children spawned during the
     // resumed turn must not outlive it — nothing else can see or reach them.
-    this.abortOwnedChildren(id);
-
+    this.abortOwnedChildren(record.id);
     return record;
+  }
+
+  /** Resume an existing agent session and wait for its next turn. */
+  async resume(
+    id: string,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<AgentRecord | undefined> {
+    const record = this.agents.get(id);
+    if (!record?.session) return undefined;
+    this.prepareResume(record, "running");
+    return this.executeResume(record, prompt, signal);
+  }
+
+  /** Queue a top-level background resume under the shared concurrency limit. */
+  resumeInBackground(id: string, prompt: string): AgentRecord | undefined {
+    const record = this.agents.get(id);
+    if (!record?.session || record.parentAgentId) return undefined;
+    if (record.status === "running" || record.status === "queued") return undefined;
+
+    record.abortController = new AbortController();
+    this.prepareResume(record, "queued");
+    if (this.runningBackground >= this.maxConcurrent) {
+      this.queue.push({ kind: "resume", id, prompt });
+    } else {
+      this.startBackgroundResume(record, prompt);
+    }
+    return record;
+  }
+
+  private startBackgroundResume(record: AgentRecord, prompt: string): void {
+    this.prepareResume(record, "running");
+    this.runningBackground++;
+    this.onStart?.(record);
+
+    record.promise = this.executeResume(record, prompt, record.abortController?.signal)
+      .then((resumed) => {
+        this.runningBackground--;
+        try { this.onComplete?.(resumed); } catch { /* ignore completion side-effect errors */ }
+        this.drainQueue();
+        return resumed.result ?? "";
+      });
   }
 
   /**
