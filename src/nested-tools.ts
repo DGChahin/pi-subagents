@@ -123,6 +123,9 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
 type ResultPosition = "inline" | "fetched";
 
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
+  if (record.settledRevision !== record.runRevision) {
+    return `Agent ${record.id} is ${record.status === "stopped" ? "stopping" : record.status}.`;
+  }
   if (record.status === "error") {
     return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
   }
@@ -179,13 +182,15 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(`Nested agent "${params.resume}" is already ${existing.status}.`, true);
+        }
+        if (existing.settledRevision !== existing.runRevision) {
+          return textResult(`Nested agent "${params.resume}" is still settling.`, true);
+        }
         if (
-          existing.status !== "running"
-          && existing.status !== "queued"
-          && (
-            existing.resultConsumed !== true
-            || existing.pendingDeliveryRevision === existing.runRevision
-          )
+          existing.resultConsumed !== true
+          || existing.pendingDeliveryRevision === existing.runRevision
         ) {
           return textResult(`Retrieve nested agent "${params.resume}" before resuming it.`, true);
         }
@@ -312,12 +317,15 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         const rec = context.manager.getRecord(id);
         if (!rec) return;
         rec.outputFile = createOutputFilePath(context.configCwd, id, transcriptSessionId);
+        rec.outputCwd = ctx.cwd;
+        rec.outputPromptRevision = rec.runRevision;
         writeInitialEntry(rec.outputFile, id, params.prompt, ctx.cwd);
       };
       options.onSessionCreated = (session) => {
         const rec = childId === undefined ? undefined : context.manager.getRecord(childId);
         if (rec?.outputFile && childId !== undefined) {
           rec.outputCleanup = streamToOutputFile(session, rec.outputFile, childId, ctx.cwd);
+          rec.outputCleanupRevision = rec.runRevision;
         }
       };
 
@@ -375,7 +383,14 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // call is aborted) stops only this wait; the nested child keeps running and
       // stays unconsumed. Queued records have no promise until the manager starts
       // them, so poll — abortably — until they leave the queue, then await.
-      if (params.wait && (record.status === "queued" || record.status === "running")) {
+      if (
+        params.wait
+        && (
+          record.status === "queued"
+          || record.status === "running"
+          || record.settledRevision !== revision
+        )
+      ) {
         while (record.status === "queued") {
           await abortable(new Promise<void>(resolve => setTimeout(resolve, 250)), signal);
         }
@@ -384,6 +399,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       const result = textResult(formatRecord(record, "fetched"), record.status === "error");
       if (
         record.runRevision === revision
+        && record.settledRevision === revision
         && record.status !== "running"
         && record.status !== "queued"
       ) {

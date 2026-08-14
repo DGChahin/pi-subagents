@@ -2,8 +2,8 @@
  * worktree.ts — Git worktree isolation for agents.
  *
  * Creates a temporary git worktree so the agent works on an isolated copy of the repo.
- * On completion, if no changes were made, the worktree is cleaned up.
- * If changes exist, a branch is created and returned in the result.
+ * Turn completion checkpoints changes to a branch while the resumable worktree stays live.
+ * Definitive record cleanup removes the worktree and preserves its result branch.
  */
 
 import { execFileSync } from "node:child_process";
@@ -17,6 +17,8 @@ export interface WorktreeInfo {
   path: string;
   /** Branch name created for this worktree (if changes exist). */
   branch: string;
+  /** Whether this worktree has created and now owns `branch`. */
+  branchCreated?: boolean;
   /** Commit SHA that the worktree was created from. */
   baseSha: string;
   /**
@@ -28,14 +30,28 @@ export interface WorktreeInfo {
   workPath: string;
 }
 
-export interface WorktreeCleanupResult {
-  /** Whether changes were found in the worktree. */
-  hasChanges: boolean;
-  /** Branch name if changes were committed. */
-  branch?: string;
-  /** Worktree path if it was kept. */
-  path?: string;
-}
+export type WorktreeCleanupResult =
+  | {
+    status: "unchanged";
+    hasChanges: false;
+    branch?: never;
+    path?: never;
+    error?: never;
+  }
+  | {
+    status: "checkpointed";
+    hasChanges: true;
+    branch: string;
+    path: string;
+    error?: never;
+  }
+  | {
+    status: "failed";
+    hasChanges?: never;
+    branch?: never;
+    path: string;
+    error: string;
+  };
 
 /**
  * Create a temporary git worktree for an agent.
@@ -80,22 +96,20 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
   }
 }
 
-/**
- * Clean up a worktree after agent completion.
- * - If no changes: remove worktree entirely.
- * - If changes exist: create a branch, commit changes, return branch info.
- */
-export function cleanupWorktree(
-  cwd: string,
+/** Commit current work and update its result branch without removing the resumable worktree. */
+export function checkpointWorktree(
   worktree: WorktreeInfo,
   agentDescription: string,
 ): WorktreeCleanupResult {
   if (!existsSync(worktree.path)) {
-    return { hasChanges: false };
+    return {
+      status: "failed",
+      path: worktree.path,
+      error: "Worktree path does not exist.",
+    };
   }
 
   try {
-    // Check for uncommitted changes in the worktree
     const status = execFileSync("git", ["status", "--porcelain"], {
       cwd: worktree.path,
       stdio: "pipe",
@@ -103,81 +117,95 @@ export function cleanupWorktree(
     }).toString().trim();
 
     if (status) {
-      // Changes exist — stage, commit, and create a branch
       execFileSync("git", ["add", "-A"], { cwd: worktree.path, stdio: "pipe", timeout: 10000 });
-      // Truncate description for commit message (no shell sanitization needed — execFileSync uses argv)
       const safeDesc = agentDescription.slice(0, 200);
-      const commitMsg = `pi-agent: ${safeDesc}`;
-      execFileSync("git", ["commit", "--no-verify", "-m", commitMsg], {
+      execFileSync("git", ["commit", "--no-verify", "-m", `pi-agent: ${safeDesc}`], {
         cwd: worktree.path,
         stdio: "pipe",
         timeout: 10000,
       });
-    } else {
-      const currentSha = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: worktree.path,
-        stdio: "pipe",
-        timeout: 5000,
-      }).toString().trim();
+    }
 
-      if (currentSha === worktree.baseSha) {
-        // No changes — remove worktree
-        removeWorktree(cwd, worktree.path);
-        return { hasChanges: false };
+    const currentSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktree.path,
+      stdio: "pipe",
+      timeout: 5000,
+    }).toString().trim();
+    if (currentSha === worktree.baseSha) {
+      return { status: "unchanged", hasChanges: false };
+    }
+
+    if (!worktree.branchCreated) {
+      let branchName = worktree.branch;
+      try {
+        execFileSync("git", ["switch", "-c", branchName], {
+          cwd: worktree.path,
+          stdio: "pipe",
+          timeout: 5000,
+        });
+      } catch {
+        branchName = `${worktree.branch}-${Date.now()}`;
+        execFileSync("git", ["switch", "-c", branchName], {
+          cwd: worktree.path,
+          stdio: "pipe",
+          timeout: 5000,
+        });
       }
+      worktree.branch = branchName;
+      worktree.branchCreated = true;
     }
-
-    // Create a branch pointing to the worktree's HEAD.
-    // If the branch already exists, append a suffix to avoid overwriting previous work.
-    let branchName = worktree.branch;
-    try {
-      execFileSync("git", ["branch", branchName], {
-        cwd: worktree.path,
-        stdio: "pipe",
-        timeout: 5000,
-      });
-    } catch {
-      // Branch already exists — use a unique suffix
-      branchName = `${worktree.branch}-${Date.now()}`;
-      execFileSync("git", ["branch", branchName], {
-        cwd: worktree.path,
-        stdio: "pipe",
-        timeout: 5000,
-      });
-    }
-    // Update branch name in worktree info for the caller
-    worktree.branch = branchName;
-
-    // Remove the worktree (branch persists in main repo)
-    removeWorktree(cwd, worktree.path);
 
     return {
+      status: "checkpointed",
       hasChanges: true,
       branch: worktree.branch,
       path: worktree.path,
     };
-  } catch {
-    // Best effort cleanup on error
-    try { removeWorktree(cwd, worktree.path); } catch { /* ignore */ }
-    return { hasChanges: false };
+  } catch (err) {
+    return {
+      status: "failed",
+      path: worktree.path,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
-/**
- * Force-remove a worktree.
- */
-function removeWorktree(cwd: string, worktreePath: string): void {
+/** Save final changes, remove the retained worktree, and keep its result branch. */
+export function cleanupWorktree(
+  cwd: string,
+  worktree: WorktreeInfo,
+  agentDescription: string,
+): WorktreeCleanupResult {
+  const result = checkpointWorktree(worktree, agentDescription);
+  if (result.status === "failed") return result;
+
+  const removalError = removeWorktree(cwd, worktree.path);
+  if (removalError) {
+    return {
+      status: "failed",
+      path: worktree.path,
+      error: `Worktree removal failed: ${removalError}`,
+    };
+  }
+  return result;
+}
+
+/** Force-remove a worktree, returning an error when recovery remains necessary. */
+function removeWorktree(cwd: string, worktreePath: string): string | undefined {
   try {
     execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
       cwd,
       stdio: "pipe",
       timeout: 10000,
     });
-  } catch {
-    // If git worktree remove fails, try pruning
+    return undefined;
+  } catch (err) {
+    // Pruning can clear a stale registration, but it does not make the failed
+    // removal successful or prove that the retained path is safe to forget.
     try {
       execFileSync("git", ["worktree", "prune"], { cwd, stdio: "pipe", timeout: 5000 });
-    } catch { /* ignore */ }
+    } catch { /* retain the original removal error */ }
+    return err instanceof Error ? err.message : String(err);
   }
 }
 

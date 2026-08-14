@@ -569,16 +569,34 @@ export default function (pi: ExtensionAPI) {
     // Keep them out of top-level lifecycle, transcript, notification, and UI channels.
     if (record.parentAgentId) return;
 
-    // Emit lifecycle event based on terminal status
+    const finishWithoutDelivery = () => {
+      clearMatchingPendingRevision({ record, revision: record.runRevision });
+      agentActivity.delete(record.id);
+      widget.markFinished(record.id);
+      fleet.onAgentFinished(record.id);
+      widget.update();
+    };
+    const belongsToCurrentParent = () => record.parentSessionGeneration === sessionGeneration;
+    if (!belongsToCurrentParent()) {
+      finishWithoutDelivery();
+      return;
+    }
+
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     const eventData = buildEventData(record);
     if (isError) {
+      if (!belongsToCurrentParent()) return;
       pi.events.emit("subagents:failed", eventData);
     } else {
+      if (!belongsToCurrentParent()) return;
       pi.events.emit("subagents:completed", eventData);
     }
 
-    // Persist final record for cross-extension history reconstruction
+    // An event listener can synchronously replace the parent session.
+    if (!belongsToCurrentParent()) {
+      finishWithoutDelivery();
+      return;
+    }
     pi.appendEntry("subagents:record", {
       id: record.id, type: record.type, description: record.description,
       status: record.status, result: record.result, error: record.error,
@@ -588,21 +606,13 @@ export default function (pi: ExtensionAPI) {
     const revision = record.runRevision;
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
-      clearMatchingPendingRevision({ record, revision });
-      agentActivity.delete(record.id);
-      widget.markFinished(record.id);
-      fleet.onAgentFinished(record.id);
-      widget.update();
+      finishWithoutDelivery();
       return;
     }
 
     record.pendingDeliveryRevision = revision;
-    if ((record.parentSessionGeneration ?? sessionGeneration) !== sessionGeneration) {
-      clearMatchingPendingRevision({ record, revision });
-      agentActivity.delete(record.id);
-      widget.markFinished(record.id);
-      fleet.onAgentFinished(record.id);
-      widget.update();
+    if (!belongsToCurrentParent()) {
+      finishWithoutDelivery();
       return;
     }
 
@@ -627,15 +637,14 @@ export default function (pi: ExtensionAPI) {
     // This fallback supports records created without a generation capture hook.
     // Queue start must not overwrite the dispatch identity already on the record.
     record.parentSessionGeneration ??= sessionGeneration;
-    // Emit started event when agent transitions to running (including from queue)
+    if (record.parentSessionGeneration !== sessionGeneration) return;
     pi.events.emit("subagents:started", {
       id: record.id,
       type: record.type,
       description: record.description,
     });
   }, (record, info) => {
-    if (record.parentAgentId) return;
-    // Emit compacted event when agent's session compacts (preserves count on record).
+    if (record.parentAgentId || record.parentSessionGeneration !== sessionGeneration) return;
     pi.events.emit("subagents:compacted", {
       id: record.id,
       type: record.type,
@@ -768,24 +777,25 @@ export default function (pi: ExtensionAPI) {
     attemptCompletionDelivery();
   });
 
-  // On shutdown, abort all agents immediately and clean up.
-  // If the session is going down, there's nothing left to consume agent results.
+  // On shutdown, stop every writer before deleting its transcript, session,
+  // record, or retained worktree.
   pi.on("session_shutdown", async () => {
     sessionGeneration += 1;
+    currentCtx = undefined;
+    scheduler.stop();
+    manager.abortAll();
     rpcHandle?.unsubSpawn();
     rpcHandle?.unsubStop();
     rpcHandle?.unsubPing();
     rpcHandle = undefined;
-    currentCtx = undefined;
     // Only release the global slot if this activation claimed it — a child
     // session's shutdown must not delete the root session's registry entry.
     if (ownsManagerRegistry && (globalThis as any)[MANAGER_KEY] === registryEntry) {
       delete (globalThis as any)[MANAGER_KEY];
     }
-    scheduler.stop();
-    manager.abortAll();
     clearPendingCompletionDelivery();
     unsubscribeBarrierOpen();
+    await manager.waitForAll();
     fleet.dispose();
     manager.dispose();
   });
@@ -1347,6 +1357,9 @@ Terse command-style prompts produce shallow, generic work.
       const attachTranscript = (rec: AgentRecord | undefined, agentId: string): void => {
         if (!rec || !outputTranscript) return;
         rec.outputFile = createOutputFilePath(ctx.cwd, agentId, ctx.sessionManager.getSessionId());
+        rec.outputFileGeneration = sessionGeneration;
+        rec.outputCwd = ctx.cwd;
+        rec.outputPromptRevision = rec.runRevision;
         writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
 
@@ -1434,6 +1447,11 @@ Terse command-style prompts produce shallow, generic work.
         if (existing.status === "running" || existing.status === "queued") {
           return textResult(`Agent "${params.resume}" is already ${existing.status}. Wait for it to finish before resuming it.`);
         }
+        if (existing.settledRevision !== existing.runRevision) {
+          return textResult(
+            `Agent "${params.resume}" is still settling revision ${existing.runRevision}. Wait for it to finish before resuming it.`,
+          );
+        }
         if (
           existing.resultConsumed !== true
           || existing.pendingDeliveryRevision === existing.runRevision
@@ -1441,6 +1459,25 @@ Terse command-style prompts produce shallow, generic work.
           return textResult(
             `Agent "${params.resume}" has an unconsumed completed run. Use get_subagent_result before resuming it.`,
           );
+        }
+
+        const nextRevision = existing.runRevision + 1;
+        if (existing.outputFile) {
+          existing.outputCwd ??= ctx.cwd;
+          if (existing.outputFileGeneration !== sessionGeneration) {
+            const resumeOutputFile = createOutputFilePath(ctx.cwd, existing.id, ctx.sessionManager.getSessionId());
+            existing.outputFileGeneration = sessionGeneration;
+            existing.outputCwd = ctx.cwd;
+            if (resumeOutputFile === existing.outputFile) {
+              existing.outputPromptRevision = undefined;
+            } else {
+              existing.outputFile = resumeOutputFile;
+              existing.outputPromptRevision = nextRevision;
+              writeInitialEntry(existing.outputFile, existing.id, params.prompt, ctx.cwd);
+            }
+          } else {
+            existing.outputPromptRevision = undefined;
+          }
         }
 
         const resumed = manager.resumeInBackground(params.resume, params.prompt);
@@ -1472,6 +1509,7 @@ Terse command-style prompts produce shallow, generic work.
           const rec = manager.getRecord(id);
           if (rec?.outputFile) {
             rec.outputCleanup = streamToOutputFile(session, rec.outputFile, id, ctx.cwd);
+            rec.outputCleanupRevision = rec.runRevision;
           }
         };
 
@@ -1520,13 +1558,15 @@ Terse command-style prompts produce shallow, generic work.
         fleet.ensureTimer();
         fleet.update();
 
-        // Emit created event
-        pi.events.emit("subagents:created", {
-          id,
-          type: subagentType,
-          description: params.description,
-          isBackground: true,
-        });
+        // Emit only into the parent session that dispatched this run.
+        if (record?.parentSessionGeneration === sessionGeneration) {
+          pi.events.emit("subagents:created", {
+            id,
+            type: subagentType,
+            description: params.description,
+            isBackground: true,
+          });
+        }
 
         const isQueued = record?.status === "queued";
         return textResult(
@@ -1582,7 +1622,14 @@ Terse command-style prompts produce shallow, generic work.
       // completion notification can still be delivered.
       // Queued agents have no promise yet (it's created when the queue starts
       // them), so poll until they leave the queue, then await like a running one.
-      if (params.wait && (record.status === "running" || record.status === "queued")) {
+      if (
+        params.wait
+        && (
+          record.status === "running"
+          || record.status === "queued"
+          || record.settledRevision !== revision
+        )
+      ) {
         while (record.status === "queued") {
           await abortable(
             new Promise<void>((resolve) => setTimeout(resolve, QUEUE_WAIT_POLL_MS)),
@@ -1592,6 +1639,7 @@ Terse command-style prompts produce shallow, generic work.
         if (record.promise) await abortable(record.promise, signal);
       }
 
+      const isSettled = record.runRevision === revision && record.settledRevision === revision;
       const displayName = getDisplayName(record.type);
       const duration = formatDuration(record.startedAt, record.completedAt);
       const tokens = formatLifetimeTokens(record);
@@ -1607,17 +1655,19 @@ Terse command-style prompts produce shallow, generic work.
         `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
         `Description: ${record.description}\n\n`;
 
-      if (record.status === "running") {
-        output += "Agent is still running. Use wait: true or check back later.";
+      if (!isSettled) {
+        output += record.status === "stopped"
+          ? "Agent is stopping. Its current revision has not settled yet. Use wait: true or check back later."
+          : "Agent is still running. Use wait: true or check back later.";
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
         output += record.result?.trim() || "No output.";
       }
 
-      // Mark only this run as consumed and remove it from every delivery path.
+      // Mark only this fully settled run as consumed and remove it from every delivery path.
       if (
-        record.runRevision === revision
+        isSettled
         && record.status !== "running"
         && record.status !== "queued"
       ) {
@@ -1666,13 +1716,17 @@ Terse command-style prompts produce shallow, generic work.
         // Session not ready yet — queue the steer for delivery once initialized
         if (!record.pendingSteers) record.pendingSteers = [];
         record.pendingSteers.push(params.message);
-        pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+        if (record.parentSessionGeneration === sessionGeneration) {
+          pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+        }
         return textResult(`Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`);
       }
 
       try {
         await steerAgent(record.session, params.message);
-        pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+        if (record.parentSessionGeneration === sessionGeneration) {
+          pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+        }
         const tokens = formatLifetimeTokens(record);
         const contextPercent = getSessionContextPercent(record.session);
         const stateParts: string[] = [];
