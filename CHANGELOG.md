@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-17
+
 > **⚠️ Note — an agent file's frontmatter `name:` now substitutes for the filename as its `subagent_type`.** Following Claude Code, the declared name is the dispatch identity and the filename is only the fallback, so `blubb.md` with `name: code-review` is spawned, mentioned and listed as `code-review`. Any value is accepted except one containing `:`, which Claude Code reserves for plugin scoping; such a file — like any unparseable one — is skipped with a warning rather than loaded under a name nothing honours, and `strictAgentFiles` turns that into a startup failure.
 
 > **⚠️ Breaking — subagent sessions now persist to disk by default** (`rememberAgents`). Transcripts that used to be in-memory are written to the session dir and appear nested under their spawner in pi's `/resume`. Per-agent `persist_session:` overrides it in both directions — `false` keeps that agent in memory, `true` persists it even with the setting off. Set `rememberAgents: false` to restore the previous behaviour globally.
