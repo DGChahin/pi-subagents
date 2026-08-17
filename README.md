@@ -758,26 +758,57 @@ This is useful for creating agents that inherit extension tools but should not h
 
 ```
 src/
-  index.ts            # Extension entry: tool/command registration, rendering
+  index.ts            # Extension entry: tool/command registration, /agents menu, rendering
   types.ts            # Type definitions (AgentConfig, AgentRecord, etc.)
+
+  # Agent registry
   default-agents.ts   # Embedded default agent configs (general-purpose, Explore, Plan)
+  custom-agents.ts    # Load user-defined agents from .pi/agents/, .agents/agents/, and global agents
   agent-types.ts      # Unified agent registry (defaults + user), tool name resolution
+  agent-file-toggle.ts # Locate/edit an agent's .md: enabled: toggle, eject to frontmatter
   agent-color.ts      # Claude Code/Agency Agents name color parsing and badge rendering
+
+  # Execution
   agent-runner.ts     # Session creation, execution, graceful max_turns, steer/resume
   agent-manager.ts    # Agent lifecycle, concurrency queue, completion notifications
-  cross-extension-rpc.ts # RPC handlers for cross-extension spawn/ping via pi.events
+  nested-tools.ts     # Delegation tools handed to subagents (nested spawn/collect/steer)
+  child-context.ts    # AsyncLocalStorage flag marking work done for a child session
+  abortable.ts        # Race a wait against Esc without cancelling the background child
   group-join.ts       # Group join manager: batched completion notifications with timeout
-  custom-agents.ts    # Load user-defined agents from .pi/agents/, .agents/agents/, and global agents
+  status-note.ts      # Honest status note + salvaged partial output for non-normal outcomes
+  usage.ts            # Token usage shapes, accumulators, session-stats readers
+
+  # Invocation surface
+  invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
+  model-resolver.ts   # Model resolution: exact provider/modelId with fuzzy fallback
+  enabled-models.ts   # Read pi's enabledModels settings (project over global)
+  model-scope.ts      # scopeModels allowlist policy, shared by top-level and nested tools
+  mention.ts          # `@handle message` grammar: suggestion triggers and send parsing
+  mention-clone.ts    # Run a mention's turn in a cloned conversation, off the main chat
+  cross-extension-rpc.ts # RPC handlers for cross-extension spawn/ping via pi.events
+
+  # Scheduling
+  schedule.ts         # SubagentScheduler: cron / +10m / interval / ISO dispatch
+  schedule-store.ts   # PID-locked, session-scoped, atomic schedule persistence
+
+  # Context & environment
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
   skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
   output-file.ts      # Streaming output file transcripts for agent sessions
   worktree.ts         # Git worktree isolation (create, cleanup, prune)
   prompts.ts          # Config-driven system prompt builder
   context.ts          # Parent conversation context for inherit_context
+  settings.ts         # Persistent settings (~/.pi/agent/subagents.json + .pi/subagents.json)
   env.ts              # Environment detection (git, platform)
+
   ui/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
+    fleet-list.ts         # FleetView: navigable agent list below the editor
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
+    viewer-keys.ts        # Viewer scroll keys resolved through user keybindings
+    agent-mention.ts      # `@` roster (running, resumable, and startable agents) + popup rows
+    schedule-menu.ts      # /agents → Scheduled jobs submenu
+    select-item.ts        # Collision-safe ctx.ui.select wrapper (numbered rows)
 ```
 
 ## License
