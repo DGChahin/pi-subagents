@@ -34,7 +34,7 @@
     "nanoid": "^5.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
