@@ -566,7 +566,7 @@ describe("letting a clone of the conversation start the agent", () => {
     release?.();
   });
 
-  it("says the agent is starting, since the chat shows nothing", async () => {
+  it("says the agent is being prompted, not started — nothing runs yet", async () => {
     const { lifecycle } = boot();
     cloneReturns({ spawned: true });
 
@@ -576,7 +576,9 @@ describe("letting a clone of the conversation start the agent", () => {
       uiCtx,
     );
 
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith("Starting @explore…", "info");
+    // The clone's turn happens first, so the agent does not exist yet. `direct`
+    // mode's "Started @explore" is the contrast: there, it does.
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith("Prompting @explore…", "info");
   });
 
   it("starts the agent directly when the clone cannot", async () => {

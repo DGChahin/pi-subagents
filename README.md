@@ -169,7 +169,7 @@ It is a literal clone — the session's own entries and the same system prompt, 
 
 | Mode | `@plan sketch the migration`, with no Plan agent running |
 |------|----------------------------------------------------------|
-| `model` (default) | a clone of this conversation takes the turn off-screen and calls `Agent`, so the agent starts with a prompt **written from the conversation**. Nothing reaches the chat but a `Starting @plan…` toast |
+| `model` (default) | a clone of this conversation takes the turn off-screen and calls `Agent`, so the agent starts with a prompt **written from the conversation**. Nothing reaches the chat but a `Prompting @plan…` toast — the wording marks the wait for that turn, where `direct`'s `Started @plan` means it is already running |
 | `direct` | the agent starts here, immediately, with your message verbatim as its prompt. No model call at all, so no latency before it begins |
 | `off` | `@` means only "attach a file" again |
 

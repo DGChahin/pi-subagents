@@ -857,7 +857,12 @@ export default function (pi: ExtensionAPI) {
     // chat, and what it starts is an ordinary top-level agent.
     if (getAgentMentionMode() === "model") {
       const label = `@${handleBase(type)}`;
-      ctx.ui.notify(`Starting ${label}…`, "info");
+      // "Prompting", not "Starting": in this mode nothing starts until the
+      // off-screen clone has taken a whole model turn writing the agent's
+      // prompt, and that wait is the one thing the chat cannot show. `direct`
+      // says "Started" because by then it has. The distinction tells the user
+      // which of the two they are waiting on.
+      ctx.ui.notify(`Prompting ${label}…`, "info");
       // Not awaited: the clone runs a full model turn, and prompt() is blocked
       // until this hook returns. The user gets their prompt back immediately
       // and the agent appears in the widget when it starts.
