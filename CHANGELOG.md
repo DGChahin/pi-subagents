@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-08-18
+
+### Fixed
+
+- **A `model`-mode mention now actually reaches the agent it starts.** The off-screen clone was built with an empty tool allowlist, which stripped its own `Agent` tool, so every start fell back to a direct spawn with a warning. Fixing that surfaced a second bug behind it: the clone spawned in the foreground, answering into a session disposed moments later, so the agent ran and reached nobody. Its spawn is now forced to the background.
+- **`@` offers files again.** Handle rows are merged into pi's own suggestion list instead of replacing it — the provider asked pi only when no agent matched, and prefix matching meant an empty token matched every handle, so a bare `@` listed no files at all.
+
 ## [0.17.0] - 2026-08-17
 
 > **⚠️ Note — an agent file's frontmatter `name:` now substitutes for the filename as its `subagent_type`.** Following Claude Code, the declared name is the dispatch identity and the filename is only the fallback, so `blubb.md` with `name: code-review` is spawned, mentioned and listed as `code-review`. Any value is accepted except one containing `:`, which Claude Code reserves for plugin scoping; such a file — like any unparseable one — is skipped with a warning rather than loaded under a name nothing honours, and `strictAgentFiles` turns that into a startup failure.
