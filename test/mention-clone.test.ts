@@ -75,8 +75,27 @@ function agentTool() {
 }
 
 /**
+ * Pi's own tool-visibility rule, reproduced from `sdk.js` + `agent-session.js`:
+ * an allowlist is derived once (`tools`, or the empty list when `noTools:
+ * "all"`), and EVERY tool — built-in, extension and custom alike — is dropped
+ * from the registry unless the allowlist names it. So `noTools: "all"` does not
+ * mean "no built-ins, keep my custom tool": it means the clone is handed
+ * nothing, answers in prose, and the mention falls back to a direct start.
+ */
+function visibleTools(opts: any): any[] {
+  const allowed = opts.tools ?? (opts.noTools === "all" ? [] : undefined);
+  const allowedSet = allowed ? new Set<string>(allowed) : undefined;
+  const excluded = new Set<string>(opts.excludeTools ?? []);
+  return (opts.customTools ?? []).filter(
+    (tool: any) => (!allowedSet || allowedSet.has(tool.name)) && !excluded.has(tool.name),
+  );
+}
+
+/**
  * Stand in for `createAgentSession`. `turn` receives the clone's single custom
- * tool and plays the part of the model deciding what to do with it.
+ * tool and plays the part of the model deciding what to do with it — and only
+ * the tools Pi would really expose reach it, so a clone built with an allowlist
+ * that hides its own tool prompts a model with nothing to call.
  */
 function cloneSession(turn?: (tool: any) => Promise<void> | void) {
   const session = {
@@ -85,8 +104,11 @@ function cloneSession(turn?: (tool: any) => Promise<void> | void) {
     dispose: vi.fn(),
   } as any;
   createAgentSession.mockImplementation(async (opts: any) => {
+    const tools = visibleTools(opts);
     session.prompt.mockImplementation(async () => {
-      await turn?.(opts.customTools[0]);
+      // No tool, no tool call: the model can only answer in prose.
+      if (tools.length === 0) return;
+      await turn?.(tools[0]);
     });
     session.createdWith = opts;
     return { session };
@@ -203,9 +225,26 @@ describe("cloning the conversation", () => {
     await runMentionClone(opts());
 
     const built = createAgentSession.mock.calls[0][0];
-    expect(built.noTools).toBe("all");
     expect(built.customTools).toHaveLength(1);
     expect(built.customTools[0].name).toBe("Agent");
+    expect(visibleTools(built).map((tool: any) => tool.name)).toEqual(["Agent"]);
+  });
+
+  it("names its own tool in the allowlist, or Pi hands it nothing", async () => {
+    // `noTools: "all"` reads like "no built-ins, keep my custom tool" and is
+    // not: it sets an EMPTY allowlist, which strips the custom tool from the
+    // registry too (agent-session.js `isAllowedTool`). The clone then has
+    // nothing to call, every mention falls through to the direct start, and the
+    // user sees "Started @x directly — the conversation clone did not start it"
+    // on every single one. Naming the tool is what makes it reachable.
+    cloneSession(callsAgent());
+
+    const result = await runMentionClone(opts());
+
+    const built = createAgentSession.mock.calls[0][0];
+    expect(built.tools).toEqual(["Agent"]);
+    expect(built.noTools).toBeUndefined();
+    expect(result).toEqual({ spawned: true });
   });
 
   it("prompts it with the message, then the reminder", async () => {
@@ -254,7 +293,36 @@ describe("attributing the spawn to the real session", () => {
     expect(tool.execute.mock.calls[0][1]).toEqual({
       subagent_type: "Plan",
       prompt: "sketch the migration",
+      run_in_background: true,
     });
+  });
+
+  it("forces the spawn into the background — a foreground result goes nowhere", async () => {
+    // `run_in_background` defaults to false, and a foreground agent returns its
+    // answer as the TOOL RESULT: AgentManager marks the record `resultConsumed`
+    // precisely so the completion notification is skipped as redundant. Here
+    // that tool result lands in the throwaway clone, which is disposed moments
+    // later — so the agent runs to completion, shows up in the widget and the
+    // fleet, and its answer reaches nobody. The main conversation is not part
+    // of the clone's turn, so background delivery is the only way back.
+    const tool = agentTool();
+    cloneSession(callsAgent({ subagent_type: "Explore", prompt: "go" }));
+
+    await runMentionClone(opts({ agentTool: tool }));
+
+    expect(tool.execute.mock.calls[0][1]).toMatchObject({ run_in_background: true });
+  });
+
+  it("overrides a clone that explicitly asked for a foreground run", async () => {
+    // Nothing tells the clone's model that its own turn is discarded, so an
+    // explicit `false` is a reasonable thing for it to emit. It must not decide
+    // this one.
+    const tool = agentTool();
+    cloneSession(callsAgent({ subagent_type: "Explore", prompt: "go", run_in_background: false }));
+
+    await runMentionClone(opts({ agentTool: tool }));
+
+    expect(tool.execute.mock.calls[0][1]).toMatchObject({ run_in_background: true });
   });
 
   it("refuses a second spawn from the same mention", async () => {

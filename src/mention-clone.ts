@@ -50,7 +50,12 @@
  *     file both under the throwaway fork;
  *   - it is called with no tool-call id. The clone's turn produces one, but the
  *     real session never issued it, and a `<tool-use-id>` pointing at nothing
- *     is exactly the bug the mention-resume path had to fix.
+ *     is exactly the bug the mention-resume path had to fix;
+ *   - and it is forced into the background. A foreground agent returns its
+ *     answer as the tool result and is marked `resultConsumed` so no completion
+ *     notification is sent — correct when the caller is the real conversation,
+ *     silent loss when the caller is a fork about to be discarded. Background
+ *     delivery is the only route from a mention back to the main model.
  *
  * The clone gets one tool and one job. It cannot read, write or run anything —
  * an invisible turn with the full toolset could do invisible work.
@@ -110,8 +115,18 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
         });
       }
       spawned = true;
-      // undefined tool-call id + the main ctx: see the header.
-      return agentTool.execute(undefined as never, params, signal, onUpdate, ctx);
+      // undefined tool-call id + the main ctx: see the header. Background is
+      // forced rather than left to the clone: `run_in_background` defaults to
+      // false, and a foreground agent answers through its TOOL RESULT — which
+      // here is delivered into a session that is disposed moments later, so the
+      // agent would run, appear in the widget and the fleet, and reach nobody.
+      return agentTool.execute(
+        undefined as never,
+        { ...(params as Record<string, unknown>), run_in_background: true } as typeof params,
+        signal,
+        onUpdate,
+        ctx,
+      );
     },
   };
 
@@ -141,7 +156,15 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
         ...(thinkingLevel && { thinkingLevel }),
         modelRegistry: ctx.modelRegistry,
         ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
-        noTools: "all",
+        // An allowlist naming exactly the clone's own tool. NOT `noTools:
+        // "all"`, whose doc comment ("start with no tools enabled") reads like
+        // it spares custom tools and does not: it resolves to an EMPTY
+        // allowlist, and `isAllowedTool` then drops every tool from the
+        // registry — the custom one included. The clone would be prompted with
+        // nothing to call, answer in prose, and every mention would fall
+        // through to the direct start with a warning. Same idiom as
+        // agent-runner's `tools: sessionTools` beside its nested `customTools`.
+        tools: [cloneAgentTool.name],
         customTools: [cloneAgentTool],
       } as Parameters<typeof createAgentSession>[0]),
     );
