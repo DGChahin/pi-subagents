@@ -89,6 +89,7 @@ async function runForegroundSteeredAgent(tools: Map<string, any>) {
       description: "Locate organization-scope changes",
       subagent_type: "Explore",
       max_turns: 20,
+      run_in_background: false,
     },
     undefined,
     undefined,

@@ -19,6 +19,23 @@ export interface SubagentsSettings {
   graceTurns?: number;
   defaultJoinMode?: JoinMode;
   /**
+   * Whether a top-level `Agent` spawn that doesn't say runs detached.
+   * Defaults to `true`, following Claude Code, where the agent backgrounds
+   * unless the caller passes `run_in_background: false`. Set `false` to restore
+   * the previous behaviour, where an unqualified spawn blocked the turn and
+   * returned its result inline.
+   *
+   * Top-level only. Nested spawns (a subagent spawning its own) always default
+   * to foreground regardless of this setting — see `nested-tools.ts`, where a
+   * detached child would be killed by `abortOwnedChildren` when its parent
+   * settles, with no notification path to deliver its result.
+   *
+   * An explicit `run_in_background` on the call, or in the agent file's
+   * frontmatter, overrides this in both directions; the setting only decides
+   * what "unspecified" means.
+   */
+  backgroundByDefault?: boolean;
+  /**
    * Master switch for the schedule subagent feature. Defaults to `true`.
    * When `false`: the `Agent` tool's `schedule` param + its guideline are
    * stripped from the tool spec at registration (zero LLM-context cost), the
@@ -190,6 +207,7 @@ export interface SettingsAppliers {
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
+  setBackgroundByDefault: (b: boolean) => void;
   setSchedulingEnabled: (b: boolean) => void;
   setScopeModels: (enabled: boolean) => void;
   setStrictAgentFiles: (b: boolean) => void;
@@ -256,6 +274,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.defaultJoinMode === "string" && VALID_JOIN_MODES.has(r.defaultJoinMode)) {
     out.defaultJoinMode = r.defaultJoinMode as JoinMode;
+  }
+  if (typeof r.backgroundByDefault === "boolean") {
+    out.backgroundByDefault = r.backgroundByDefault;
   }
   if (typeof r.schedulingEnabled === "boolean") {
     out.schedulingEnabled = r.schedulingEnabled;
@@ -360,6 +381,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
   if (typeof s.fallbackSubagent === "string") appliers.setFallbackSubagent(s.fallbackSubagent);
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);
+  if (typeof s.backgroundByDefault === "boolean") appliers.setBackgroundByDefault(s.backgroundByDefault);
   if (typeof s.schedulingEnabled === "boolean") appliers.setSchedulingEnabled(s.schedulingEnabled);
   if (typeof s.scopeModels === "boolean") appliers.setScopeModels(s.scopeModels);
   if (typeof s.strictAgentFiles === "boolean") appliers.setStrictAgentFiles(s.strictAgentFiles);

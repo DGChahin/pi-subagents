@@ -261,7 +261,9 @@ describe("Agent tool — background resume wiring", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
 
-  it("still resumes in the foreground when run_in_background is not set", async () => {
+  // Resume follows the same default as a fresh spawn — background — so
+  // foreground is now the explicit case rather than the implicit one.
+  it("still resumes in the foreground when run_in_background is false", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
@@ -270,7 +272,7 @@ describe("Agent tool — background resume wiring", () => {
     vi.mocked(resumeAgent).mockResolvedValue({ text: "inline answer" } as any);
     const res = await tools.get("Agent").execute(
       "resume-call",
-      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id },
+      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: false },
       undefined,
       undefined,
       ctx,

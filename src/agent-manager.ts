@@ -23,8 +23,17 @@ export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
-/** Default max concurrent background agents. */
-const DEFAULT_MAX_CONCURRENT = 4;
+/**
+ * Default max concurrent background agents.
+ *
+ * Raised from 4 when top-level spawns started defaulting to background
+ * (`backgroundByDefault`): foreground agents bypass this pool entirely, so
+ * while foreground was the default a fan-out of six ran six. With background
+ * as the default every top-level agent takes a slot, and a limit of 4 would
+ * have silently queued the tail of exactly the parallel fan-outs the `Agent`
+ * tool description tells the model to send.
+ */
+const DEFAULT_MAX_CONCURRENT = 10;
 
 /**
  * How many evicted agents stay addressable by name. Only a bound on memory —

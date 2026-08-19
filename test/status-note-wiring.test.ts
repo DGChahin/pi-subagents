@@ -77,7 +77,7 @@ describe("status note reaches the parent through the real handlers", () => {
 
     const res = await tools.get("Agent").execute(
       "tc1",
-      { prompt: "go", description: "d", subagent_type: "general-purpose" },
+      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: false },
       undefined, undefined, ctx(),
     );
 
@@ -114,7 +114,7 @@ describe("status note reaches the parent through the real handlers", () => {
     const parent = new AbortController();
     const call = tools.get("Agent").execute(
       "tc-stop",
-      { prompt: "go", description: "d", subagent_type: "general-purpose" },
+      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: false },
       parent.signal, undefined, ctx(),
     );
 
