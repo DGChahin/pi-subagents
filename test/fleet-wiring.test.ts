@@ -58,6 +58,7 @@ function ctxWith(ui: ReturnType<typeof uiCtx>) {
   return {
     hasUI: true,
     ui,
+    mode: "tui",
     cwd: process.cwd(),
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
@@ -159,6 +160,11 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(tools.get("steer_subagent")).toMatchObject({ renderShell: "self" });
     expect(tools.get("Agent").renderCall({}, {} as any).render(80)).toEqual([]);
     expect(tools.get("Agent").renderResult({}, {}, {} as any).render(80)).toEqual([]);
+    for (const name of ["read", "write", "edit"]) {
+      expect(tools.get(name)).toMatchObject({ renderShell: "self" });
+      expect(tools.get(name).renderCall({}, {}, {} as any).render(80)).toEqual([]);
+      expect(tools.get(name).renderResult({}, {}, {} as any, {} as any).render(80)).toEqual([]);
+    }
     await lifecycle.get("before_agent_start")?.({ prompt: "inspect" }, ctx);
     await lifecycle.get("agent_start")?.({}, ctx);
     await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
@@ -200,6 +206,28 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     const entries = vi.mocked(pi.appendEntry).mock.calls;
     expect(entries[0]?.[0]).toBe("subagents:activity");
     expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+  it("waits for the next user message before appending the next card", async () => {
+    const { pi, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx());
+    await lifecycle.get("session_start")?.({}, ctx);
+    await lifecycle.get("before_agent_start")?.({ prompt: "first" }, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+    await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+    const activityEntries = () => vi.mocked(pi.appendEntry).mock.calls.filter(([type]) => type === "subagents:activity");
+    expect(activityEntries()).toHaveLength(1);
+    await lifecycle.get("before_agent_start")?.({ prompt: "second" }, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    expect(activityEntries()).toHaveLength(1);
+    await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(activityEntries()).toHaveLength(2);
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
   it("keeps the card after a user message when lifecycle events are reordered", async () => {

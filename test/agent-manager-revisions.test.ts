@@ -17,8 +17,8 @@ vi.mock("../src/worktree.js", () => ({
 
 import { AgentManager } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
-import { checkpointWorktree, cleanupWorktree, createWorktree } from "../src/worktree.js";
 import { streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import { checkpointWorktree, cleanupWorktree, createWorktree } from "../src/worktree.js";
 
 const pi = {} as never;
 const ctx = { cwd: "/repo" } as never;

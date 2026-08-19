@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GroupJoinManager, type AgentRunCompletion } from "../src/group-join.js";
+import { type AgentRunCompletion, GroupJoinManager } from "../src/group-join.js";
 import type { AgentRecord } from "../src/types.js";
 
 function makeCompletion(id: string, overrides: Partial<AgentRecord> = {}): AgentRunCompletion {
