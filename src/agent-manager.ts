@@ -199,6 +199,37 @@ interface ResumeOptions {
   onStarted?: () => void;
 }
 
+/** Best-effort ceiling on one child's shutdown handlers, so teardown can't strand a quit. */
+const CHILD_SHUTDOWN_TIMEOUT_MS = 3_000;
+
+/**
+ * Close the extension lifecycle `runAgent` opened with `bindExtensions`, then dispose.
+ *
+ * `AgentSession.dispose()` only calls `ExtensionRunner.invalidate()` — pi emits the event
+ * itself in `AgentSessionRuntime.dispose()` beforehand, and this is the one place that binds
+ * extensions onto a session without going through that path. Without the emit, everything an
+ * extension armed in `session_start` leaks once per spawn, and its next tick throws
+ * `assertActive()` from a bare timer callback — an uncaughtException that kills pi (#242).
+ */
+async function shutdownChildSession(session: AgentSession | undefined): Promise<void> {
+  try {
+    const runner = session?.extensionRunner;
+    // Optional all the way down: on a pi without the getter, or a stubbed session from a
+    // partial `onSessionCreated`, skip the emit — the same degrade as before this fix.
+    if (runner?.hasHandlers?.("session_shutdown")) {
+      // Raced, not awaited outright. `emit` runs every handler serially with no timeout of
+      // its own, and dispose() is reached from pi's own `session_shutdown` with the TUI
+      // already torn down — one hung handler would leave a dead terminal.
+      await Promise.race([
+        runner.emit({ type: "session_shutdown", reason: "quit" }),
+        new Promise<void>(resolve => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
+      ]);
+    }
+  } catch { /* a partial session must degrade, not take the teardown down with it */ }
+  // Always, even on timeout: disposal is what this function ultimately exists to do.
+  try { session?.dispose?.(); } catch { /* ignore */ }
+}
+
 export class AgentManager {
   private agents = new Map<string, AgentRecord>();
   private cleanupInterval: ReturnType<typeof setInterval>;
@@ -925,9 +956,15 @@ export class AgentManager {
   /** Dispose a record's session and remove it from the map. */
   private removeRecord(id: string, record: AgentRecord): void {
     this.tombstone(record);
-    record.session?.dispose?.();
+    const session = record.session;
+    // Detached before the shutdown starts, so the record leaves the map at once and
+    // nothing can observe a session that is half torn down.
     record.session = undefined;
     this.agents.delete(id);
+    // Fire-and-forget is right here and only here: this runs from the 60s cleanup timer
+    // and from `clearCompleted()` on session boundaries, with the process staying alive,
+    // so handlers get their full window. The quit path awaits instead — see dispose().
+    void shutdownChildSession(session);
   }
 
   /**
@@ -1032,14 +1069,16 @@ export class AgentManager {
     }
   }
 
-  dispose() {
+  async dispose(): Promise<void> {
     clearInterval(this.cleanupInterval);
     // Clear queue
     this.queue = [];
-    for (const record of this.agents.values()) {
-      record.session?.dispose();
-    }
+    const sessions = [...this.agents.values()].map(record => record.session);
     this.agents.clear();
+    // Awaited, unlike the eviction path: pi awaits this extension's `session_shutdown`
+    // handler and the process exits right after it returns, so anything left unawaited
+    // here never runs at all. Bounded — each call carries its own ceiling, concurrently.
+    await Promise.all(sessions.map(session => shutdownChildSession(session)));
     // Prune any orphaned git worktrees (crash recovery)
     try { pruneWorktrees(process.cwd()); } catch { /* ignore */ }
     // Also prune repos that caller-supplied cwds created worktrees in — a clean

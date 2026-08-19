@@ -1013,7 +1013,11 @@ export default function (pi: ExtensionAPI) {
     for (const timer of pendingNudges.values()) clearTimeout(timer);
     pendingNudges.clear();
     fleet.dispose();
-    manager.dispose();
+    // Awaited: it emits `session_shutdown` into every retained child session so
+    // extensions bound there can release what they armed in `session_start` (#242).
+    // pi awaits this handler, and the process exits right after — unawaited, those
+    // handlers would never run. Internally bounded, so a hung one can't strand quit.
+    await manager.dispose();
   });
 
   // Live widget: show running agents above editor.
