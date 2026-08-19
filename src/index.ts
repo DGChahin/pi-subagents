@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
@@ -80,6 +80,13 @@ const hiddenToolRenderers = {
   renderCall: () => new Text("", 0, 0),
   renderResult: () => new Text("", 0, 0),
 };
+
+function registerHiddenFileToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI): void {
+  if (ctx.mode !== "tui") return;
+  pi.registerTool({ ...createReadToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createWriteToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createEditToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+}
 
 export function renderRunningAgentStatus(
   frame: string,
@@ -241,9 +248,9 @@ export default function (pi: ExtensionAPI) {
   let mainOutcome: Pick<ActivityCardRecord, "status" | "error"> = { status: "running" };
   let mainSessionActive = false;
   let mainPromptExpected = false;
-  let mainUserMessageSeen = false;
   let mainCardAppended = false;
   let mainCardAppendTimer: ReturnType<typeof setTimeout> | undefined;
+  let mainCardAppendGeneration = 0;
   let mainToolsUI: ExtensionContext["ui"] | undefined;
   let mainToolsExpandedBefore: boolean | undefined;
   let mainToolsExpansionSuppressed = false;
@@ -300,6 +307,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function clearMainCardAppendTimer(): void {
+    mainCardAppendGeneration++;
     if (mainCardAppendTimer === undefined) return;
     clearTimeout(mainCardAppendTimer);
     mainCardAppendTimer = undefined;
@@ -324,9 +332,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function scheduleMainCardAppend(): void {
-    if (!mainCard || mainCardAppended || mainCardAppendTimer !== undefined) return;
+    const card = mainCard;
+    if (!card || mainCardAppended || mainCardAppendTimer !== undefined) return;
+    const generation = mainCardAppendGeneration;
     mainCardAppendTimer = setTimeout(() => {
       mainCardAppendTimer = undefined;
+      if (mainCard !== card || mainCardAppendGeneration !== generation) return;
       appendMainCard();
     }, 0);
   }
@@ -929,8 +940,8 @@ export default function (pi: ExtensionAPI) {
     mainCard = undefined;
     mainCardAppended = false;
     mainPromptExpected = false;
-    mainUserMessageSeen = false;
     mainSessionActive = true;
+    registerHiddenFileToolRenderers(ctx, pi);
     suppressMainToolOutput(ctx);
     currentCtx = ctx;
     manager.clearCompleted(true);
@@ -957,24 +968,22 @@ export default function (pi: ExtensionAPI) {
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
   });
 
-  // Normal prompts emit the user message after agent_start; continuations do not.
-  // Keep the card correlated to whichever event arrives first.
+  // Normal prompts emit a user message after agent_start; continuations do not.
+  // Invalidate any timer from the previous prompt before creating the next card.
   pi.on("before_agent_start", (_event, ctx) => {
     if (!mainSessionActive) return;
+    clearMainCardAppendTimer();
     suppressMainToolOutput(ctx);
     mainPromptExpected = true;
     startMainCard(ctx);
-    if (mainUserMessageSeen) scheduleMainCardAppend();
   });
 
   pi.on("agent_start", (_event, ctx) => {
     if (!mainSessionActive) return;
     suppressMainToolOutput(ctx);
-    const hasPromptMessage = mainPromptExpected || mainUserMessageSeen;
     startMainCard(ctx);
-    if (!hasPromptMessage || mainUserMessageSeen) appendMainCard();
+    if (!mainPromptExpected) appendMainCard();
     mainPromptExpected = false;
-    mainUserMessageSeen = false;
   });
 
   pi.on("agent_end", (event) => {
@@ -992,7 +1001,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("message_start", (event) => {
-    if (!mainCard || event.message.role !== "assistant") return;
+    if (!mainCard) return;
+    if (event.message.role === "user") {
+      scheduleMainCardAppend();
+      return;
+    }
+    if (event.message.role !== "assistant") return;
     mainResponseText = "";
     mainThinkingText = "";
     activityCards.apply(mainCard, { type: "text", fullText: "" });
@@ -1013,7 +1027,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("message_end", (event) => {
     if (event.message.role === "user") {
-      mainUserMessageSeen = true;
       scheduleMainCardAppend();
       return;
     }
@@ -1066,7 +1079,6 @@ export default function (pi: ExtensionAPI) {
     mainCard = undefined;
     mainCardAppended = false;
     mainPromptExpected = false;
-    mainUserMessageSeen = false;
     mainSessionActive = false;
     activityTicker.dispose();
     manager.clearCompleted(true);
@@ -1105,7 +1117,6 @@ export default function (pi: ExtensionAPI) {
     mainCard = undefined;
     mainCardAppended = false;
     mainPromptExpected = false;
-    mainUserMessageSeen = false;
     mainSessionActive = false;
     unsubscribeBarrierOpen();
     await manager.waitForAll();
