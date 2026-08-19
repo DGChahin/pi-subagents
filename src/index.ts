@@ -34,24 +34,34 @@ import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type To
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type WidgetMode } from "./types.js";
 import {
+  ACTIVITY_ENTRY,
+  ACTIVITY_FINAL_ENTRY,
+  type ActivityCardData,
+  type ActivityCardRecord,
+  ActivityCardStore,
+  ActivityCardTicker,
+  type AgentActivityEvent,
+  activityCardSnapshot,
+  createActivityCardComponent,
+  toActivityCardData,
+} from "./ui/activity-card.js";
+import {
   type AgentActivity,
   type AgentDetails,
   AgentWidget,
   buildInvocationTags,
-  fgPreservingNestedStyles,
   formatDuration,
   formatMs,
   formatTokens,
   formatTurns,
   getDisplayName,
   getPromptModeLabel,
-  SPINNER,
   type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
-import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
+import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type UsageDelta } from "./usage.js";
 
 // ---- Shared helpers ----
 
@@ -63,6 +73,13 @@ function textResult(msg: string, details?: AgentDetails, terminate = false) {
     ...(terminate ? { terminate: true as const } : {}),
   };
 }
+
+/** Keep subagent tool calls in model context while rendering their transcript rows empty. */
+const hiddenToolRenderers = {
+  renderShell: "self" as const,
+  renderCall: () => new Text("", 0, 0),
+  renderResult: () => new Text("", 0, 0),
+};
 
 export function renderRunningAgentStatus(
   frame: string,
@@ -93,6 +110,7 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     turnCount: 1,
     maxTurns,
     responseText: "",
+    thinkingText: "",
     session: undefined,
     lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
   };
@@ -113,6 +131,10 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
       state.responseText = fullText;
       onStreamUpdate?.();
     },
+    onThinkingDelta: (_delta: string, fullThinking: string) => {
+      state.thinkingText = fullThinking;
+      onStreamUpdate?.();
+    },
     onTurnEnd: (turnCount: number) => {
       state.turnCount = turnCount;
       onStreamUpdate?.();
@@ -120,7 +142,7 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     onSessionCreated: (session: any) => {
       state.session = session;
     },
-    onAssistantUsage: (usage: { input: number; output: number; cacheWrite: number }) => {
+    onAssistantUsage: (usage: UsageDelta) => {
       addUsage(state.lifetimeUsage, usage);
       onStreamUpdate?.();
     },
@@ -198,6 +220,135 @@ export default function (pi: ExtensionAPI) {
   // would create another manager and leak handlers. Nested orchestration is
   // injected as scoped custom tools by the existing manager instead.
   if (inChildSessionContext()) return;
+
+  const activityCards = new ActivityCardStore();
+  const activityTicker = new ActivityCardTicker();
+  if (typeof pi.registerEntryRenderer === "function") {
+    pi.registerEntryRenderer<ActivityCardData>(ACTIVITY_ENTRY, (entry, _options, theme) => {
+      const data = entry.data;
+      return data ? createActivityCardComponent(activityCards, data, theme) : undefined;
+    });
+    pi.registerEntryRenderer<ActivityCardData>(ACTIVITY_FINAL_ENTRY, (entry) => {
+      if (entry.data) activityCards.hydrateFinal(entry.data);
+      return undefined;
+    });
+  }
+
+  let mainCard: ActivityCardRecord | undefined;
+  let mainTurnCount = 0;
+  let mainResponseText = "";
+  let mainThinkingText = "";
+  let mainOutcome: Pick<ActivityCardRecord, "status" | "error"> = { status: "running" };
+  let mainSessionActive = false;
+  let mainPromptExpected = false;
+  let mainUserMessageSeen = false;
+  let mainCardAppended = false;
+  let mainCardAppendTimer: ReturnType<typeof setTimeout> | undefined;
+  let mainToolsUI: ExtensionContext["ui"] | undefined;
+  let mainToolsExpandedBefore: boolean | undefined;
+  let mainToolsExpansionSuppressed = false;
+
+  // Older Pi runtimes do not expose this display-only hook; keep the cast optional.
+  const markdownPi = pi as ExtensionAPI & {
+    registerMarkdownTransformer?: (
+      transformer: (
+        markdown: string,
+        context: { messageType: "user" | "assistant" | "assistant-thinking"; isStreaming: boolean },
+      ) => string,
+    ) => void;
+  };
+  markdownPi.registerMarkdownTransformer?.((markdown, { messageType, isStreaming }) => {
+    if (messageType === "assistant-thinking") return "";
+    if (messageType === "assistant" && isStreaming && mainSessionActive) return "";
+    return markdown;
+  });
+
+  function startMainCard(ctx: ExtensionContext): void {
+    if (mainCard) {
+      mainCard.status = "running";
+      mainCard.completedAt = undefined;
+      mainCard.error = undefined;
+      mainOutcome = { status: "running" };
+      activityCards.apply(mainCard, { type: "start" });
+      return;
+    }
+    const model = ctx.model;
+    const now = Date.now();
+    const card: ActivityCardRecord = {
+      id: `main:${sessionGeneration}:${now}`,
+      type: "main",
+      displayName: "Main",
+      description: "Main context",
+      status: "running",
+      toolUses: 0,
+      startedAt: now,
+      compactionCount: 0,
+      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      invocation: {
+        modelName: model ? `${model.provider}/${model.id}` : undefined,
+      },
+    };
+    mainCard = card;
+    mainCardAppended = false;
+    mainTurnCount = 0;
+    mainResponseText = "";
+    mainThinkingText = "";
+    mainOutcome = { status: "running" };
+    activityCards.begin(card);
+    activityTicker.start();
+    if (ctx.mode === "tui") activityTicker.setUICtx(ctx.ui as UICtx);
+  }
+
+  function clearMainCardAppendTimer(): void {
+    if (mainCardAppendTimer === undefined) return;
+    clearTimeout(mainCardAppendTimer);
+    mainCardAppendTimer = undefined;
+  }
+
+  // Pi exposes no renderer-only override for built-in tools; collapse their rows
+  // for this session and restore the user's setting on switch or shutdown.
+  function suppressMainToolOutput(ctx: ExtensionContext): void {
+    if (mainToolsExpansionSuppressed) return;
+    mainToolsUI = ctx.ui;
+    mainToolsExpandedBefore = ctx.ui.getToolsExpanded?.() ?? true;
+    ctx.ui.setToolsExpanded?.(false);
+    mainToolsExpansionSuppressed = true;
+  }
+
+  function restoreMainToolOutput(): void {
+    if (!mainToolsExpansionSuppressed) return;
+    mainToolsUI?.setToolsExpanded?.(mainToolsExpandedBefore ?? true);
+    mainToolsUI = undefined;
+    mainToolsExpandedBefore = undefined;
+    mainToolsExpansionSuppressed = false;
+  }
+
+  function scheduleMainCardAppend(): void {
+    if (!mainCard || mainCardAppended || mainCardAppendTimer !== undefined) return;
+    mainCardAppendTimer = setTimeout(() => {
+      mainCardAppendTimer = undefined;
+      appendMainCard();
+    }, 0);
+  }
+
+  function finishMainCard(): void {
+    if (!mainCard) return;
+    clearMainCardAppendTimer();
+    appendMainCard();
+    mainCard.status = mainOutcome.status;
+    mainCard.error = mainOutcome.error;
+    mainCard.completedAt = Date.now();
+    activityCards.finish(mainCard);
+    pi.appendEntry<ActivityCardData>(ACTIVITY_FINAL_ENTRY, activityCardSnapshot(mainCard, activityCards));
+    mainCard = undefined;
+    mainCardAppended = false;
+  }
+
+  function appendMainCard(): void {
+    if (!mainCard || mainCardAppended) return;
+    mainCardAppended = true;
+    pi.appendEntry<ActivityCardData>(ACTIVITY_ENTRY, toActivityCardData(mainCard));
+  }
 
   // ---- Register custom notification renderer ----
   pi.registerMessageRenderer<NotificationDetails>(
@@ -455,7 +606,7 @@ export default function (pi: ExtensionAPI) {
       pi.sendMessage<NotificationDetails>({
         customType: "subagent-notification",
         content: `Background agent completion: ${label}\n\n${notifications}`,
-        display: true,
+        display: false,
         details,
       }, { deliverAs: "followUp", triggerTurn: true });
       for (const completion of deliverable) {
@@ -479,7 +630,8 @@ export default function (pi: ExtensionAPI) {
     attemptCompletionDelivery();
   }
 
-  const unsubscribeBarrierOpen = pi.events.on("context-compact:barrier-open", (payload: BarrierOpenPayload) => {
+  const unsubscribeBarrierOpen = pi.events.on("context-compact:barrier-open", (raw) => {
+    const payload = raw as BarrierOpenPayload;
     if (
       !waitingForBarrier
       || payload.barrierId !== heldBarrierId
@@ -632,6 +784,27 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   }
 
+  function cardGeneration(record: AgentRecord): number {
+    let root = record;
+    while (root.parentAgentId) {
+      const parent = manager.getRecord(root.parentAgentId);
+      if (!parent) break;
+      root = parent;
+    }
+    return root.parentSessionGeneration ?? sessionGeneration;
+  }
+  function cardBelongsToCurrentSession(record: AgentRecord): boolean {
+    return cardGeneration(record) === sessionGeneration;
+  }
+  function syncCardAncestors(record: AgentRecord): void {
+    for (let id = record.parentAgentId; id !== undefined; ) {
+      const parent = manager.getRecord(id);
+      if (!parent) break;
+      activityCards.sync(parent);
+      id = parent.parentAgentId;
+    }
+  }
+
   const manager = new AgentManager(handleAgentComplete, undefined, (record) => {
     if (record.parentAgentId) return;
     // This fallback supports records created without a generation capture hook.
@@ -653,7 +826,20 @@ export default function (pi: ExtensionAPI) {
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
     });
-  }, () => sessionGeneration);
+  }, () => sessionGeneration, (record) => {
+    if (!cardBelongsToCurrentSession(record)) return;
+    activityCards.begin(record);
+    activityTicker.start();
+    pi.appendEntry<ActivityCardData>(ACTIVITY_ENTRY, toActivityCardData(record));
+  }, (record) => {
+    if (!cardBelongsToCurrentSession(record)) return;
+    activityCards.finish(record);
+    pi.appendEntry<ActivityCardData>(ACTIVITY_FINAL_ENTRY, activityCardSnapshot(record, activityCards));
+  }, (record, event: AgentActivityEvent) => {
+    if (!cardBelongsToCurrentSession(record)) return;
+    activityCards.apply(record, event);
+    if (event.type === "usage") syncCardAncestors(record);
+  });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -737,6 +923,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     sessionGeneration += 1;
     clearPendingCompletionDelivery();
+    restoreMainToolOutput();
+    clearMainCardAppendTimer();
+    activityCards.clear();
+    mainCard = undefined;
+    mainCardAppended = false;
+    mainPromptExpected = false;
+    mainUserMessageSeen = false;
+    mainSessionActive = true;
+    suppressMainToolOutput(ctx);
     currentCtx = ctx;
     manager.clearCompleted(true);
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -762,10 +957,118 @@ export default function (pi: ExtensionAPI) {
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
   });
 
+  // Normal prompts emit the user message after agent_start; continuations do not.
+  // Keep the card correlated to whichever event arrives first.
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!mainSessionActive) return;
+    suppressMainToolOutput(ctx);
+    mainPromptExpected = true;
+    startMainCard(ctx);
+    if (mainUserMessageSeen) scheduleMainCardAppend();
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    if (!mainSessionActive) return;
+    suppressMainToolOutput(ctx);
+    const hasPromptMessage = mainPromptExpected || mainUserMessageSeen;
+    startMainCard(ctx);
+    if (!hasPromptMessage || mainUserMessageSeen) appendMainCard();
+    mainPromptExpected = false;
+    mainUserMessageSeen = false;
+  });
+
+  pi.on("agent_end", (event) => {
+    if (!mainCard) return;
+    const assistant = [...event.messages].reverse().find(message => message.role === "assistant");
+    if (!assistant) {
+      mainOutcome = { status: "completed" };
+    } else if (assistant.stopReason === "error") {
+      mainOutcome = { status: "error", error: assistant.errorMessage };
+    } else if (assistant.stopReason === "aborted") {
+      mainOutcome = { status: "aborted", error: assistant.errorMessage };
+    } else {
+      mainOutcome = { status: "completed" };
+    }
+  });
+
+  pi.on("message_start", (event) => {
+    if (!mainCard || event.message.role !== "assistant") return;
+    mainResponseText = "";
+    mainThinkingText = "";
+    activityCards.apply(mainCard, { type: "text", fullText: "" });
+    activityCards.apply(mainCard, { type: "thinking", fullText: "" });
+  });
+
+  pi.on("message_update", (event) => {
+    if (!mainCard) return;
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta") {
+      mainResponseText += update.delta;
+      activityCards.apply(mainCard, { type: "text", fullText: mainResponseText });
+    } else if (update.type === "thinking_delta") {
+      mainThinkingText += update.delta;
+      activityCards.apply(mainCard, { type: "thinking", fullText: mainThinkingText });
+    }
+  });
+
+  pi.on("message_end", (event) => {
+    if (event.message.role === "user") {
+      mainUserMessageSeen = true;
+      scheduleMainCardAppend();
+      return;
+    }
+    if (!mainCard || event.message.role !== "assistant") return;
+    const u = event.message.usage;
+    const usage: UsageDelta = {
+      input: u.input ?? 0,
+      output: u.output ?? 0,
+      cacheWrite: u.cacheWrite ?? 0,
+      ...(u.cacheRead !== undefined ? { cacheRead: u.cacheRead } : {}),
+      ...(u.cost?.total !== undefined ? { cost: u.cost.total } : {}),
+    };
+    addUsage(mainCard.lifetimeUsage, usage);
+    activityCards.apply(mainCard, { type: "usage", usage });
+  });
+
+  pi.on("tool_execution_start", (event) => {
+    if (!mainCard) return;
+    activityCards.apply(mainCard, { type: "tool", activity: { type: "start", toolName: event.toolName } });
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    if (!mainCard) return;
+    mainCard.toolUses++;
+    activityCards.apply(mainCard, { type: "tool", activity: { type: "end", toolName: event.toolName } });
+  });
+
+  pi.on("turn_end", () => {
+    if (!mainCard) return;
+    mainTurnCount++;
+    activityCards.apply(mainCard, { type: "turn", turnCount: mainTurnCount });
+  });
+
+  pi.on("session_compact", (event) => {
+    if (!mainCard) return;
+    mainCard.compactionCount++;
+    activityCards.apply(mainCard, {
+      type: "compaction",
+      info: { reason: event.reason, tokensBefore: event.compactionEntry.tokensBefore },
+    });
+  });
+
   pi.on("session_before_switch", () => {
     sessionGeneration += 1;
     currentCtx = undefined;
+    restoreMainToolOutput();
     clearPendingCompletionDelivery();
+    clearMainCardAppendTimer();
+    activityCards.clear();
+    mainCard = undefined;
+    mainCardAppended = false;
+    mainPromptExpected = false;
+    mainUserMessageSeen = false;
+    mainSessionActive = false;
+    activityTicker.dispose();
     manager.clearCompleted(true);
     scheduler.stop();
   });
@@ -774,6 +1077,7 @@ export default function (pi: ExtensionAPI) {
   // `before-continuation` in its settlement handler. Keep this call synchronous;
   // any future async settlement path must claim before its first await.
   pi.on("agent_settled", () => {
+    finishMainCard();
     attemptCompletionDelivery();
   });
 
@@ -794,6 +1098,15 @@ export default function (pi: ExtensionAPI) {
       delete (globalThis as any)[MANAGER_KEY];
     }
     clearPendingCompletionDelivery();
+    restoreMainToolOutput();
+    activityTicker.dispose();
+    clearMainCardAppendTimer();
+    activityCards.clear();
+    mainCard = undefined;
+    mainCardAppended = false;
+    mainPromptExpected = false;
+    mainUserMessageSeen = false;
+    mainSessionActive = false;
     unsubscribeBarrierOpen();
     await manager.waitForAll();
     fleet.dispose();
@@ -913,6 +1226,7 @@ export default function (pi: ExtensionAPI) {
   // Grab UI context from first tool execution + clear lingering widget on new turn
   pi.on("tool_execution_start", async (_event, ctx) => {
     widget.setUICtx(ctx.ui as UICtx);
+    activityTicker.setUICtx(ctx.ui as UICtx);
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
     widget.onTurnStart();
   });
@@ -1179,93 +1493,7 @@ Terse command-style prompts produce shallow, generic work.
       ...scheduleParam,
     }),
 
-    // ---- Custom rendering: Claude Code style ----
-
-    renderCall(args, theme) {
-      const displayName = args.subagent_type ? getDisplayName(args.subagent_type) : "Agent";
-      const desc = args.description ?? "";
-      return new Text("▸ " + theme.fg("toolTitle", theme.bold(displayName)) + (desc ? "  " + theme.fg("muted", desc) : ""), 0, 0);
-    },
-
-    renderResult(result, { expanded, isPartial }, theme) {
-      const details = result.details as AgentDetails | undefined;
-      if (!details) {
-        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-        return new Text(text, 0, 0);
-      }
-
-      // Helper: build "haiku · thinking: high · ↻5≤30 · 3 tool uses · 33.8k tokens" stats string
-      const stats = (d: AgentDetails) => {
-        const parts: string[] = [];
-        if (d.modelName) parts.push(d.modelName);
-        if (d.tags) parts.push(...d.tags);
-        if (d.turnCount != null && d.turnCount > 0) {
-          parts.push(formatTurns(d.turnCount, d.maxTurns));
-        }
-        if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
-        if (d.tokens) parts.push(d.tokens);
-        return parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(" " + theme.fg("dim", "·") + " ");
-      };
-
-      // ---- While running (streaming) ----
-      if (isPartial || details.status === "running") {
-        const frame = SPINNER[details.spinnerFrame ?? 0];
-        const s = stats(details);
-        return renderRunningAgentStatus(frame, s, details.activity ?? "thinking…", theme);
-      }
-
-      // ---- Background agent launched ----
-      if (details.status === "background") {
-        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0);
-      }
-
-      // ---- Completed / Steered ----
-      if (details.status === "completed" || details.status === "steered") {
-        const duration = formatMs(details.durationMs);
-        const isSteered = details.status === "steered";
-        const icon = isSteered ? theme.fg("warning", "✓") : theme.fg("success", "✓");
-        const s = stats(details);
-        let line = icon + (s ? " " + s : "");
-        line += " " + theme.fg("dim", "·") + " " + theme.fg("dim", duration);
-
-        if (expanded) {
-          const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
-          if (resultText) {
-            const lines = resultText.split("\n").slice(0, 50);
-            for (const l of lines) {
-              line += "\n" + theme.fg("dim", `  ${l}`);
-            }
-            if (resultText.split("\n").length > 50) {
-              line += "\n" + theme.fg("muted", "  ... (use get_subagent_result with verbose for full output)");
-            }
-          }
-        } else {
-          const doneText = isSteered ? "Wrapped up (turn limit)" : "Done";
-          line += "\n" + theme.fg("dim", `  ⎿  ${doneText}`);
-        }
-        return new Text(line, 0, 0);
-      }
-
-      // ---- Stopped (user-initiated abort) ----
-      if (details.status === "stopped") {
-        const s = stats(details);
-        let line = theme.fg("dim", "■") + (s ? " " + s : "");
-        line += "\n" + theme.fg("dim", "  ⎿  Stopped");
-        return new Text(line, 0, 0);
-      }
-
-      // ---- Error / Aborted (hard max_turns) ----
-      const s = stats(details);
-      let line = theme.fg("error", "✗") + (s ? " " + s : "");
-
-      if (details.status === "error") {
-        line += "\n" + theme.fg("error", `  ⎿  Error: ${details.error ?? "unknown"}`);
-      } else {
-        line += "\n" + theme.fg("warning", "  ⎿  Aborted (max turns exceeded)");
-      }
-
-      return new Text(line, 0, 0);
-    },
+    ...hiddenToolRenderers,
 
     // ---- Execute ----
 
@@ -1610,6 +1838,7 @@ Terse command-style prompts produce shallow, generic work.
         }),
       ),
     }),
+    ...hiddenToolRenderers,
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = manager.getRecord(params.agent_id);
       if (!record || record.parentAgentId) {
@@ -1704,6 +1933,7 @@ Terse command-style prompts produce shallow, generic work.
         description: "The steering message to send. This will appear as a user message in the agent's conversation.",
       }),
     }),
+    ...hiddenToolRenderers,
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = manager.getRecord(params.agent_id);
       if (!record || record.parentAgentId) {

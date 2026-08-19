@@ -15,7 +15,8 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-wor
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { streamToOutputFile } from "./output-file.js";
 import type { AgentInvocation, AgentRecord, IsolationMode, SubagentType, ThinkingLevel } from "./types.js";
-import { addUsage } from "./usage.js";
+import type { AgentActivityEvent } from "./ui/activity-card.js";
+import { addUsage, type UsageDelta } from "./usage.js";
 import {
   checkpointWorktree,
   cleanupWorktree,
@@ -28,6 +29,9 @@ import {
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
+export type OnAgentSpawn = (record: AgentRecord) => void;
+export type OnAgentFinish = (record: AgentRecord) => void;
+export type OnAgentActivity = (record: AgentRecord, event: AgentActivityEvent) => void;
 export type CaptureParentGeneration = () => number;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
@@ -122,12 +126,14 @@ interface SpawnOptions {
   onToolActivity?: (activity: ToolActivity) => void;
   /** Called on streaming text deltas from the assistant response. */
   onTextDelta?: (delta: string, fullText: string) => void;
+  /** Called on streaming thinking deltas from the assistant response. */
+  onThinkingDelta?: (delta: string, fullThinking: string) => void;
   /** Called when the agent session is created (for accessing session stats). */
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
   /** Called once per assistant message_end with that message's usage delta. */
-  onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+  onAssistantUsage?: (usage: UsageDelta) => void;
   /** Called when the session successfully compacts. */
   onCompaction?: (info: CompactionInfo) => void;
   /** Nesting depth: top-level subagent = 1. */
@@ -148,6 +154,9 @@ export class AgentManager {
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
+  private onSpawn?: OnAgentSpawn;
+  private onFinish?: OnAgentFinish;
+  private onActivity?: OnAgentActivity;
   private captureParentGeneration?: CaptureParentGeneration;
   private maxConcurrent: number;
   /** Base repos worktrees were created from — so dispose() can prune them all,
@@ -165,11 +174,17 @@ export class AgentManager {
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
     captureParentGeneration?: CaptureParentGeneration,
+    onSpawn?: OnAgentSpawn,
+    onFinish?: OnAgentFinish,
+    onActivity?: OnAgentActivity,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onCompact = onCompact;
     this.captureParentGeneration = captureParentGeneration;
+    this.onSpawn = onSpawn;
+    this.onFinish = onFinish;
+    this.onActivity = onActivity;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
@@ -237,6 +252,7 @@ export class AgentManager {
         : undefined,
     };
     this.agents.set(id, record);
+    this.onSpawn?.(record);
 
     const args: SpawnArgs = { pi, ctx, type, prompt, options };
 
@@ -251,6 +267,11 @@ export class AgentManager {
     try {
       this.startAgent(id, record, args);
     } catch (err) {
+      record.status = "error";
+      record.error = err instanceof Error ? err.message : String(err);
+      record.completedAt = Date.now();
+      record.settledRevision = record.runRevision;
+      try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
       this.agents.delete(id);
       throw err;
     }
@@ -298,6 +319,7 @@ export class AgentManager {
     record.startedAt = Date.now();
     if (occupiesPoolSlot(record)) this.runningBackground++;
     this.onStart?.(record);
+    this.onActivity?.(record, { type: "start" });
 
     // Wire parent abort signal to stop the subagent when the parent is interrupted
     let detachParentSignal: (() => void) | undefined;
@@ -330,23 +352,38 @@ export class AgentManager {
         if (record.runRevision !== runRevision) return;
         if (activity.type === "end") record.toolUses++;
         options.onToolActivity?.(activity);
+        this.onActivity?.(record, { type: "tool", activity });
       },
       onTurnEnd: (turnCount) => {
-        if (record.runRevision === runRevision) options.onTurnEnd?.(turnCount);
+        if (record.runRevision === runRevision) {
+          options.onTurnEnd?.(turnCount);
+          this.onActivity?.(record, { type: "turn", turnCount });
+        }
       },
       onTextDelta: (delta, fullText) => {
-        if (record.runRevision === runRevision) options.onTextDelta?.(delta, fullText);
+        if (record.runRevision === runRevision) {
+          options.onTextDelta?.(delta, fullText);
+          this.onActivity?.(record, { type: "text", fullText });
+        }
+      },
+      onThinkingDelta: (delta, fullThinking) => {
+        if (record.runRevision === runRevision) {
+          options.onThinkingDelta?.(delta, fullThinking);
+          this.onActivity?.(record, { type: "thinking", fullText: fullThinking });
+        }
       },
       onAssistantUsage: (usage) => {
         if (record.runRevision !== runRevision) return;
         addUsage(record.lifetimeUsage, usage);
         options.onAssistantUsage?.(usage);
+        this.onActivity?.(record, { type: "usage", usage });
       },
       onCompaction: (info) => {
         if (record.runRevision !== runRevision) return;
         record.compactionCount++;
         this.onCompact?.(record, info);
         options.onCompaction?.(info);
+        this.onActivity?.(record, { type: "compaction", info });
       },
       nestedRuntime: {
         manager: this,
@@ -364,6 +401,7 @@ export class AgentManager {
           record.pendingSteers = undefined;
         }
         options.onSessionCreated?.(session);
+        this.onActivity?.(record, { type: "session" });
       },
     })
       .then(async ({ responseText, session, aborted, steered, failure }) => {
@@ -414,6 +452,7 @@ export class AgentManager {
       if (record.runRevision === runRevision) {
         record.settledRevision = runRevision;
         if (!options.isBackground) record.resultConsumed = true;
+        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
         try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
       }
       if (options.isBackground && occupiesPoolSlot(record)) this.runningBackground--;
@@ -525,6 +564,7 @@ export class AgentManager {
         record.error = err instanceof Error ? err.message : String(err);
         record.completedAt = Date.now();
         record.settledRevision = record.runRevision;
+        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
         this.onComplete?.(record);
       }
     }
@@ -617,15 +657,31 @@ export class AgentManager {
     try {
       const { text, failure } = await resumeAgent(session, prompt, {
         onToolActivity: (activity) => {
-          if (record.runRevision === revision && activity.type === "end") record.toolUses++;
+          if (record.runRevision === revision) {
+            if (activity.type === "end") record.toolUses++;
+            this.onActivity?.(record, { type: "tool", activity });
+          }
+        },
+        onTextDelta: (_delta, fullText) => {
+          if (record.runRevision === revision) this.onActivity?.(record, { type: "text", fullText });
+        },
+        onThinkingDelta: (_delta, fullThinking) => {
+          if (record.runRevision === revision) this.onActivity?.(record, { type: "thinking", fullText: fullThinking });
+        },
+        onTurnEnd: (turnCount) => {
+          if (record.runRevision === revision) this.onActivity?.(record, { type: "turn", turnCount });
         },
         onAssistantUsage: (usage) => {
-          if (record.runRevision === revision) addUsage(record.lifetimeUsage, usage);
+          if (record.runRevision === revision) {
+            addUsage(record.lifetimeUsage, usage);
+            this.onActivity?.(record, { type: "usage", usage });
+          }
         },
         onCompaction: (info) => {
           if (record.runRevision !== revision) return;
           record.compactionCount++;
           this.onCompact?.(record, info);
+          this.onActivity?.(record, { type: "compaction", info });
         },
         signal,
       });
@@ -670,6 +726,7 @@ export class AgentManager {
     const record = this.agents.get(id);
     if (!record?.session || !this.canResume(record)) return undefined;
     const revision = this.beginResume(record, "running");
+    this.onActivity?.(record, { type: "start" });
     const controller = record.abortController!;
     const forwardAbort = () => controller.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
@@ -685,6 +742,7 @@ export class AgentManager {
       const resumed = await execution;
       await settlement;
       if (resumed.runRevision !== revision || resumed.settledRevision !== revision) return undefined;
+      try { this.onFinish?.(resumed); } catch { /* ignore activity side-effect errors */ }
       resumed.resultConsumed = true;
       return resumed;
     } finally {
@@ -715,6 +773,7 @@ export class AgentManager {
     record.startedAt = Date.now();
     this.runningBackground++;
     this.onStart?.(record);
+    this.onActivity?.(record, { type: "start" });
 
     const execution = this.executeResume(record, prompt, revision, record.abortController?.signal);
     const promise = execution.then(
@@ -725,6 +784,7 @@ export class AgentManager {
       this.runningBackground--;
       if (record.runRevision === revision) {
         record.settledRevision = revision;
+        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
         try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
       }
       this.drainQueue();
@@ -773,6 +833,7 @@ export class AgentManager {
       record.status = "stopped";
       record.completedAt = Date.now();
       record.settledRevision = record.runRevision;
+      try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
       return true;
     }
 
@@ -894,6 +955,7 @@ export class AgentManager {
         record.status = "stopped";
         record.completedAt = Date.now();
         record.settledRevision = record.runRevision;
+        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
         count++;
       }
     }

@@ -27,12 +27,15 @@ function makePi() {
   const lifecycle = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerEntryRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
     events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
     appendEntry: vi.fn(),
     sendMessage: vi.fn(),
+    getThinkingLevel: vi.fn(() => "high"),
   } as any;
   return { pi, tools, lifecycle };
 }
@@ -46,6 +49,8 @@ function uiCtx() {
     onTerminalInput: vi.fn(() => vi.fn()),
     getEditorText: vi.fn(() => ""),
     custom: vi.fn(),
+    getToolsExpanded: vi.fn(() => true),
+    setToolsExpanded: vi.fn(),
   };
 }
 
@@ -138,4 +143,81 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     await lifecycle.get("session_shutdown")?.({}, ctxWith(uiCtx()));
     expect(ui.setWidget).toHaveBeenCalledWith("fleet", undefined); // dispose cleared it
   });
+  it("appends and finalizes an inline card for the main context agent", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ui = uiCtx();
+    const ctx = ctxWith(ui);
+    await lifecycle.get("session_start")?.({}, ctx);
+    expect(ui.setToolsExpanded).toHaveBeenCalledWith(false);
+    const transformer = vi.mocked(pi.registerMarkdownTransformer).mock.calls[0]?.[0];
+    expect(transformer?.("thinking", { messageType: "assistant-thinking", isStreaming: false })).toBe("");
+    expect(transformer?.("stream", { messageType: "assistant", isStreaming: true })).toBe("");
+    expect(transformer?.("answer", { messageType: "assistant", isStreaming: false })).toBe("answer");
+    expect(tools.get("Agent")).toMatchObject({ renderShell: "self" });
+    expect(tools.get("get_subagent_result")).toMatchObject({ renderShell: "self" });
+    expect(tools.get("steer_subagent")).toMatchObject({ renderShell: "self" });
+    expect(tools.get("Agent").renderCall({}, {} as any).render(80)).toEqual([]);
+    expect(tools.get("Agent").renderResult({}, {}, {} as any).render(80)).toEqual([]);
+    await lifecycle.get("before_agent_start")?.({ prompt: "inspect" }, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+    await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(vi.mocked(pi.appendEntry).mock.calls[0]?.[0]).toBe("subagents:activity");
+    await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
+    await lifecycle.get("message_update")?.({
+      assistantMessageEvent: { type: "thinking_delta", delta: "checking" },
+    }, ctx);
+    await lifecycle.get("tool_execution_start")?.({ toolName: "read" }, ctx);
+    await lifecycle.get("tool_execution_end")?.({ toolName: "read" }, ctx);
+    await lifecycle.get("turn_end")?.({}, ctx);
+    await lifecycle.get("message_end")?.({
+      message: {
+        role: "assistant",
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+      },
+    }, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+
+    const entries = vi.mocked(pi.appendEntry).mock.calls;
+    expect(entries[0]?.[0]).toBe("subagents:activity");
+    expect(entries[0]?.[1]).toMatchObject({ displayName: "Main", description: "Main context" });
+    expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
+    expect(entries.at(-1)?.[1]).toMatchObject({ status: "completed", toolUses: 1, turnCount: 1 });
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+    expect(ui.setToolsExpanded).toHaveBeenCalledWith(true);
+  });
+  it("appends a card for a continuation without a new user message", async () => {
+    const { pi, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx());
+    await lifecycle.get("session_start")?.({}, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+    const entries = vi.mocked(pi.appendEntry).mock.calls;
+    expect(entries[0]?.[0]).toBe("subagents:activity");
+    expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+  it("keeps the card after a user message when lifecycle events are reordered", async () => {
+    const { pi, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx());
+    await lifecycle.get("session_start")?.({}, ctx);
+    await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+    await lifecycle.get("before_agent_start")?.({ prompt: "inspect" }, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+    const entries = vi.mocked(pi.appendEntry).mock.calls;
+    expect(entries[0]?.[0]).toBe("subagents:activity");
+    expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
+
+
 });
