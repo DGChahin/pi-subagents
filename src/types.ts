@@ -243,6 +243,12 @@ export interface NotificationDetails {
   turnCount: number;
   maxTurns?: number;
   totalTokens: number;
+  /**
+   * Estimated cost in USD, from pi's per-message `usage.cost.total`. Always
+   * populated (0 when the model has no pricing); the renderer decides whether
+   * to show it, per the `showCost` setting.
+   */
+  totalCost?: number;
   durationMs: number;
   outputFile?: string;
   error?: string;

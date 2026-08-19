@@ -45,6 +45,7 @@ import {
   buildInvocationTags,
   describeActivity,
   fgPreservingNestedStyles,
+  formatCost,
   formatDuration,
   formatMs,
   formatTokens,
@@ -58,7 +59,7 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
-import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
+import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
 
 // ---- Shared helpers ----
@@ -98,7 +99,7 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     maxTurns,
     responseText: "",
     session: undefined,
-    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
   };
 
   const callbacks = {
@@ -124,7 +125,7 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     onSessionCreated: (session: any) => {
       state.session = session;
     },
-    onAssistantUsage: (usage: { input: number; output: number; cacheWrite: number }) => {
+    onAssistantUsage: (usage: LifetimeUsage) => {
       addUsage(state.lifetimeUsage, usage);
       onStreamUpdate?.();
     },
@@ -159,13 +160,17 @@ function escapeXml(s: string): string {
 }
 
 /** Format a structured task notification matching Claude Code's <task-notification> XML. */
-function formatTaskNotification(record: AgentRecord, resultMaxLen: number): string {
+function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showCost = false): string {
   const status = getStatusLabel(record.status, record.error);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
   const contextPercent = getSessionContextPercent(record.session);
   const ctxXml = contextPercent !== null ? `<context_percent>${Math.round(contextPercent)}</context_percent>` : "";
   const compactXml = record.compactionCount ? `<compactions>${record.compactionCount}</compactions>` : "";
+  // Only under `showCost`: this is LLM context, and a figure the orchestrator
+  // did not ask for is a figure it may start reporting unprompted.
+  const cost = showCost ? getLifetimeCost(record.lifetimeUsage) : 0;
+  const costXml = cost > 0 ? `<estimated_cost_usd>${cost.toFixed(4)}</estimated_cost_usd>` : "";
 
   const resultPreview = record.result
     ? record.result.length > resultMaxLen
@@ -181,7 +186,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
     `<result>${escapeXml(resultPreview)}</result>`,
-    `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}<duration_ms>${durationMs}</duration_ms></usage>`,
+    `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
   ].filter(Boolean).join('\n');
 }
@@ -197,6 +202,10 @@ function buildDetails(
     ...base,
     toolUses: record.toolUses,
     tokens: formatLifetimeTokens(record),
+    // Raw, and unconditional: `tokens` is preformatted because it is one stat,
+    // but a cost is joined by "·" in one surface, "," in another and "|" in a
+    // third — so it travels as a number and each renderer punctuates its own.
+    cost: getLifetimeCost(record.lifetimeUsage),
     turnCount: activity?.turnCount,
     maxTurns: activity?.maxTurns,
     durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
@@ -219,6 +228,10 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     turnCount: activity?.turnCount ?? 0,
     maxTurns: activity?.maxTurns,
     totalTokens,
+    // Carried unconditionally; the renderer gates on the setting. Details are
+    // data, and a notification rendered before a mid-session toggle should not
+    // be stuck with the old answer.
+    totalCost: getLifetimeCost(record.lifetimeUsage),
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     outputFile: record.outputFile,
     error: record.error,
@@ -295,6 +308,10 @@ export default function (pi: ExtensionAPI) {
         if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
         if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
         if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
+        if (showCost) {
+          const costText = formatCost(d.totalCost ?? 0);
+          if (costText) parts.push(costText);
+        }
         if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
         if (parts.length) {
           line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
@@ -318,7 +335,19 @@ export default function (pi: ExtensionAPI) {
       }
 
       const all = [d, ...(d.others ?? [])];
-      return new Text(all.map(renderOne).join("\n"), 0, 0);
+      const rendered = all.map(renderOne);
+      // A group of agents lands as one notification, and the number a user wants
+      // from it is what the batch cost — not four figures to add up by hand.
+      // Derived from the per-agent details rather than carried alongside them:
+      // one source, so the total can never disagree with the rows above it.
+      if (showCost && all.length > 1) {
+        const total = formatCost(all.reduce((sum, a) => sum + (a.totalCost ?? 0), 0));
+        if (total) {
+          const tokens = all.reduce((sum, a) => sum + a.totalTokens, 0);
+          rendered.unshift(theme.fg("dim", `${all.length} agents · ${formatTokens(tokens)} · ${total}`));
+        }
+      }
+      return new Text(rendered.join("\n"), 0, 0);
     }
   );
 
@@ -338,6 +367,23 @@ export default function (pi: ExtensionAPI) {
 
   // ---- Agent activity tracking + widget ----
   const agentActivity = new Map<string, AgentActivity>();
+
+  // ---- Usage reporting (both off by default; see SubagentsSettings) ----
+  /** Attach subagent spend to tool results, so the parent session counts it. */
+  let reportUsage = false;
+  function isReportUsageEnabled(): boolean { return reportUsage; }
+  function setReportUsage(b: boolean): void {
+    reportUsage = b;
+    // Whatever accumulated while it was on is stale the moment it goes off:
+    // draining it later would bill the parent for a window the user opted out
+    // of, in one lump, on some unrelated later tool call.
+    if (!b) pendingUsage.drain();
+  }
+  /** Show `~$X` next to token counts in the subagent surfaces. */
+  let showCost = false;
+  function isShowCostEnabled(): boolean { return showCost; }
+  function setShowCost(b: boolean): void { showCost = b; widget.update(); fleet.update(); }
+  const pendingUsage = new PendingUsagePool();
 
   // ---- Cancellable pending notifications ----
   // Holds notifications briefly so get_subagent_result can cancel them
@@ -368,7 +414,7 @@ export default function (pi: ExtensionAPI) {
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
 
-    const notification = formatTaskNotification(record, 500);
+    const notification = formatTaskNotification(record, 500, showCost);
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
 
     pi.sendMessage<NotificationDetails>({
@@ -398,7 +444,7 @@ export default function (pi: ExtensionAPI) {
         const unconsumed = records.filter(r => !r.resultConsumed);
         if (unconsumed.length === 0) { widget.update(); return; }
 
-        const notifications = unconsumed.map(r => formatTaskNotification(r, 300)).join('\n\n');
+        const notifications = unconsumed.map(r => formatTaskNotification(r, 300, showCost)).join('\n\n');
         const label = partial
           ? `${unconsumed.length} agent(s) finished (partial — others still running)`
           : `${unconsumed.length} agent(s) finished`;
@@ -433,6 +479,18 @@ export default function (pi: ExtensionAPI) {
     const tokens = total > 0
       ? { input: u.input, output: u.output, total }
       : undefined;
+    // The whole run's spend as a pi `Usage` — pi's convention for handing spend
+    // to a consumer, so `usage.cost.total` and `usage.cacheRead` are where a
+    // listener already expects them and anything pi adds to `Usage` arrives
+    // without a change here. Omitted when nothing was spent, so "spent nothing"
+    // and "never ran" stay distinguishable. Ungated by `showCost`: that setting
+    // governs what a human is shown, not what the event carries.
+    //
+    // `tokens` above is the other convention, kept as it shipped: a flat view
+    // model like pi's own `SessionStats`, carrying the DISPLAY total, which
+    // excludes cacheRead (#38). The two answer different questions and neither
+    // derives from the other.
+    const usage = toReportedUsage(u);
     return {
       id: record.id,
       type: record.type,
@@ -443,6 +501,7 @@ export default function (pi: ExtensionAPI) {
       toolUses: record.toolUses,
       durationMs,
       tokens,
+      usage,
     };
   }
 
@@ -518,6 +577,12 @@ export default function (pi: ExtensionAPI) {
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
     });
+  }, (_record, usage) => {
+    // Every assistant message from every agent — nested included, exactly once.
+    // Parked here until a tool result can carry it back to the parent session;
+    // see `PendingUsagePool`. Skipped entirely when the feature is off, so no
+    // pool grows in a session that will never drain it.
+    if (reportUsage) pendingUsage.add(usage);
   });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
@@ -866,7 +931,7 @@ export default function (pi: ExtensionAPI) {
       // Not awaited: the clone runs a full model turn, and prompt() is blocked
       // until this hook returns. The user gets their prompt back immediately
       // and the agent appears in the widget when it starts.
-      void runMentionClone({ ctx, type, message: mention.message, agentTool })
+      void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool })
         .then((result) => {
           if (result.spawned) return;
           // A clone that could not run must not swallow the mention: start the
@@ -938,11 +1003,11 @@ export default function (pi: ExtensionAPI) {
   // everything else; "off" = hide the widget entirely. Read live at render time.
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
-  const widget = new AgentWidget(manager, agentActivity, getWidgetMode);
+  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled);
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
-  const fleet = new FleetList(manager, agentActivity);
+  const fleet = new FleetList(manager, agentActivity, isShowCostEnabled);
   let fleetViewEnabled = true;
   function isFleetViewEnabled(): boolean { return fleetViewEnabled; }
   function setFleetViewEnabled(b: boolean): void { fleetViewEnabled = b; fleet.setEnabled(b); }
@@ -1206,6 +1271,8 @@ export default function (pi: ExtensionAPI) {
       setWorktreeIsolation: setWorktreeIsolationEnabled,
       setMaxSubagentDepth: setMaxSubagentDepth,
       setFallbackSubagent: setFallbackSubagent,
+      setReportUsage,
+      setShowCost,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -1469,6 +1536,10 @@ Terse command-style prompts produce shallow, generic work.
         }
         if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
         if (d.tokens) parts.push(d.tokens);
+        if (showCost) {
+          const costText = formatCost(d.cost ?? 0);
+          if (costText) parts.push(costText);
+        }
         return parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(" " + theme.fg("dim", "·") + " ");
       };
 
@@ -1858,6 +1929,7 @@ Terse command-style prompts produce shallow, generic work.
           ...detailBase,
           toolUses: fgState.toolUses,
           tokens: formatLifetimeTokens(fgState),
+          cost: getLifetimeCost(fgState.lifetimeUsage),
           turnCount: fgState.turnCount,
           maxTurns: fgState.maxTurns,
           durationMs: Date.now() - startedAt,
@@ -1953,6 +2025,10 @@ Terse command-style prompts produce shallow, generic work.
       const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
       const statsParts = [`${record.toolUses} tool uses`];
       if (tokenText) statsParts.push(tokenText);
+      if (showCost) {
+        const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
+        if (costText) statsParts.push(costText);
+      }
       return textResult(
         `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
         (record.result?.trim() || "No output."),
@@ -1960,11 +2036,43 @@ Terse command-style prompts produce shallow, generic work.
       );
     },
   });
-  pi.registerTool(agentTool);
+  /**
+   * Wrap a tool so its results carry back whatever subagent spend the parent
+   * session has not been told about yet (see `PendingUsagePool`).
+   *
+   * Pi copies `AgentToolResult.usage` onto the persisted tool-result message and
+   * folds it into `getSessionStats()`, which is what the footer, the statusline
+   * and `/cost` read — so this is the whole of "report usage to the parent".
+   *
+   * Nothing is attached to a call with no tool-call id. That is the `@handle`
+   * mention path (`mention-clone.ts`), which invokes this tool from a fork of the
+   * conversation that is discarded moments later: the result never becomes a
+   * message in the real session, so usage hung on it would be spend the user paid
+   * for and nobody counted. Skipping leaves it pending for the next real result.
+   */
+  function withUsageReporting<T extends { execute: (...args: any[]) => any }>(tool: T): T {
+    return {
+      ...tool,
+      execute: async (toolCallId: string | undefined, ...rest: any[]) => {
+        const result = await tool.execute(toolCallId, ...rest);
+        if (!reportUsage || !toolCallId) return result;
+        const usage = pendingUsage.drain();
+        return usage ? { ...result, usage } : result;
+      },
+    };
+  }
+  function registerToolReportingUsage(tool: any): void {
+    pi.registerTool(withUsageReporting(tool));
+  }
+
+  // The mention path is handed THIS object, not the bare `agentTool` — see the
+  // mention-clone header on why the clone must call the registered tool.
+  const registeredAgentTool = withUsageReporting(agentTool);
+  pi.registerTool(registeredAgentTool);
 
   // ---- get_subagent_result tool ----
 
-  pi.registerTool(defineTool({
+  registerToolReportingUsage(defineTool({
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
@@ -2012,6 +2120,10 @@ Terse command-style prompts produce shallow, generic work.
       const contextPercent = getSessionContextPercent(record.session);
       const statsParts = [`Tool uses: ${record.toolUses}`];
       if (tokens) statsParts.push(tokens);
+      if (showCost) {
+        const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
+        if (costText) statsParts.push(`Cost: ${costText}`);
+      }
       if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
       if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
       statsParts.push(`Duration: ${duration}`);
@@ -2049,7 +2161,7 @@ Terse command-style prompts produce shallow, generic work.
 
   // ---- steer_subagent tool ----
 
-  pi.registerTool(defineTool({
+  registerToolReportingUsage(defineTool({
     name: SUBAGENT_TOOL_NAMES.STEER,
     label: "Steer Agent",
     description:
@@ -2087,6 +2199,10 @@ Terse command-style prompts produce shallow, generic work.
         const contextPercent = getSessionContextPercent(record.session);
         const stateParts: string[] = [];
         if (tokens) stateParts.push(tokens);
+        if (showCost) {
+          const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
+          if (costText) stateParts.push(costText);
+        }
         stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
         if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
         if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
@@ -2290,7 +2406,7 @@ Terse command-style prompts produce shallow, generic work.
           if (manager.abort(record.id)) {
             ctx.ui.notify(`Stopped "${record.description}".`, "info");
           }
-        }, keybindings, (message: string) => manager.steer(record.id, message));
+        }, keybindings, (message: string) => manager.steer(record.id, message), showCost);
       },
       {
         overlay: true,
@@ -2673,6 +2789,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // explicit configuration — which then fails loudly if general-purpose later
       // goes away. undefined is dropped by JSON.stringify.
       fallbackSubagent: getFallbackSubagent(),
+      reportUsage: isReportUsageEnabled(),
+      showCost: isShowCostEnabled(),
     } satisfies SubagentsSettings;
   }
 
@@ -2794,6 +2912,22 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description:
             "Allow isolation: worktree to copy the repo. Off refuses worktrees on every path immediately — for repos where a copy costs too much time or disk — and drops the `isolation` param from the Agent tool spec on next pi session.",
           currentValue: isWorktreeIsolationEnabled() ? "on" : "off",
+          values: ["on", "off"],
+        },
+        {
+          id: "reportUsage",
+          label: "Report usage to session",
+          description:
+            "Add subagent tokens and cost to this session's own totals, so pi's footer and /cost stop reading a delegating session as nearly free. Reported on the next tool result (agents that finish in the background are counted on the one after). Context-window % is unaffected.",
+          currentValue: isReportUsageEnabled() ? "on" : "off",
+          values: ["on", "off"],
+        },
+        {
+          id: "showCost",
+          label: "Show cost",
+          description:
+            "Show an estimated `~$0.0042` beside subagent token counts in the widget, fleet view, results and notifications. Priced by pi from the model's rates — omitted entirely for a model it has no rates for.",
+          currentValue: isShowCostEnabled() ? "on" : "off",
           values: ["on", "off"],
         },
         {
@@ -2927,6 +3061,19 @@ Write the file using the write tool. Only write the file, nothing else.`;
       } else if (id === "toolDescriptionMode") {
         setToolDescriptionMode(value as ToolDescriptionMode);
         notifyApplied(ctx, `Tool description set to ${value}. Takes effect on next pi session.`);
+      } else if (id === "reportUsage") {
+        const enabled = value === "on";
+        setReportUsage(enabled);
+        notifyApplied(
+          ctx,
+          enabled
+            ? "Subagent usage now counted in this session's totals"
+            : "Subagent usage no longer counted in this session's totals",
+        );
+      } else if (id === "showCost") {
+        const enabled = value === "on";
+        setShowCost(enabled);
+        notifyApplied(ctx, `Cost display ${enabled ? "enabled" : "disabled"}`);
       } else if (id === "fleetView") {
         const enabled = value === "on";
         setFleetViewEnabled(enabled);

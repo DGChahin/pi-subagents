@@ -505,3 +505,33 @@ describe("FleetList overlay lifecycle", () => {
     expect(harness([old]).render().some(l => l.includes("old done"))).toBe(false);
   });
 });
+
+describe("FleetList cost display", () => {
+  const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
+
+  function row(showCost: boolean, cost: number): string {
+    const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
+    const fleet = new FleetList(fakeManager([record]), new Map(), () => showCost);
+    let factory: any;
+    fleet.setUICtx({
+      setWidget: (_k: string, c: any) => { factory = c; },
+      onTerminalInput: () => () => {},
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise(() => {})) as any,
+    } as any);
+    fleet.update();
+    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
+  }
+
+  it("appends the cost after the token count when enabled", () => {
+    const out = row(true, 0.0042);
+    expect(out).toContain("13.1k tokens");
+    expect(out).toContain("~$0.0042");
+  });
+
+  it("shows no cost when disabled, and none for an unpriced model", () => {
+    expect(row(false, 0.0042)).not.toContain("$");
+    expect(row(true, 0)).not.toContain("$");
+  });
+});

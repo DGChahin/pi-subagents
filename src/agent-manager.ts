@@ -15,12 +15,22 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-wor
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, SubagentType, ThinkingLevel } from "./types.js";
-import { addUsage } from "./usage.js";
+import { addUsage, type LifetimeUsage } from "./usage.js";
 import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, } from "./worktree.js";
 
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
+/**
+ * Fired once per assistant `message_end`, for EVERY agent this manager owns —
+ * top-level and nested alike, spawns and resumes. The one place where each
+ * message is seen exactly once: `AgentRecord.lifetimeUsage` is deliberately
+ * double-booked into ancestors (see `nested-tools.ts`) so a hidden child's spend
+ * shows up on the record a human can see, which makes those records useless as
+ * a basis for anything that must not count a message twice — parent-session
+ * accounting above all.
+ */
+export type OnAgentUsage = (record: AgentRecord, usage: LifetimeUsage) => void;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
 /**
@@ -195,6 +205,7 @@ export class AgentManager {
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
+  private onUsage?: OnAgentUsage;
   private maxConcurrent: number;
   /** Base repos worktrees were created from — so dispose() can prune them all,
    *  not just the parent repo (caller-supplied cwd can target other repos). */
@@ -218,10 +229,12 @@ export class AgentManager {
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
+    onUsage?: OnAgentUsage,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onCompact = onCompact;
+    this.onUsage = onUsage;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
@@ -277,7 +290,7 @@ export class AgentManager {
       toolUses: 0,
       startedAt: Date.now(),
       abortController,
-      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       compactionCount: 0,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
@@ -398,6 +411,7 @@ export class AgentManager {
       onTextDelta: options.onTextDelta,
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
+        this.onUsage?.(record, usage);
         options.onAssistantUsage?.(usage);
       },
       onCompaction: (info) => {
@@ -666,6 +680,7 @@ export class AgentManager {
         },
         onAssistantUsage: (usage) => {
           addUsage(record.lifetimeUsage, usage);
+          this.onUsage?.(record, usage);
           options?.onAssistantUsage?.(usage);
         },
         onCompaction: (info) => {
@@ -756,6 +771,7 @@ export class AgentManager {
       },
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
+        this.onUsage?.(record, usage);
         options.onAssistantUsage?.(usage);
       },
       onCompaction: (info) => {

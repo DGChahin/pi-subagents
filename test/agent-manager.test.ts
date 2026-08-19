@@ -19,6 +19,7 @@ vi.mock("../src/worktree.js", () => ({
 }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { addUsage } from "../src/usage.js";
 import { isWorktreeIsolationEnabled } from "../src/worktree.js";
 
 const mockPi = {} as any;
@@ -574,6 +575,74 @@ describe("AgentManager — Bug 3 clearCompleted", () => {
   });
 });
 
+// The manager-level usage hook is the ONE place every assistant message is seen
+// exactly once, which is what parent-session accounting (#193) is built on.
+// `record.lifetimeUsage` cannot serve: nested spend is deliberately double-booked
+// into every ancestor so a hidden child shows up on a record a human can see.
+describe("AgentManager — the usage hook fires once per assistant message", () => {
+  let manager: AgentManager;
+
+  afterEach(() => {
+    manager?.dispose();
+  });
+
+  it("fires once per message, with the same delta the record accumulates", async () => {
+    const seen: any[] = [];
+    manager = new AgentManager(undefined, undefined, undefined, undefined, (r, u) => seen.push({ id: r.id, u }));
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onAssistantUsage?.({ input: 100, output: 50, cacheWrite: 10, cost: 0.01 });
+      opts.onAssistantUsage?.({ input: 200, output: 80, cacheWrite: 20, cost: 0.02 });
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    expect(seen.map(s => s.u)).toEqual([
+      { input: 100, output: 50, cacheWrite: 10, cost: 0.01 },
+      { input: 200, output: 80, cacheWrite: 20, cost: 0.02 },
+    ]);
+    expect(seen.every(s => s.id === id)).toBe(true);
+  });
+
+  it("fires once for a nested child, even though its spend is booked to ancestors too", async () => {
+    // Mimics `nested-tools.ts`: the caller's own onAssistantUsage walks the
+    // ancestor chain. If the hook sat below that walk — or if accounting read
+    // the records it writes — one child message would be billed twice.
+    const seen: any[] = [];
+    manager = new AgentManager(undefined, undefined, undefined, undefined, (_r, u) => seen.push(u));
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onAssistantUsage?.({ input: 10, output: 5, cacheWrite: 0, cost: 0.001 });
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false };
+    });
+
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent",
+      isBackground: true,
+    });
+    await manager.getRecord(parentId)!.promise;
+    seen.length = 0;
+
+    const childId = manager.spawn(mockPi, mockCtx, "general-purpose", "child", {
+      description: "child",
+      isBackground: true,
+      parentAgentId: parentId,
+      onAssistantUsage: (u: any) => { addUsage(manager.getRecord(parentId)!.lifetimeUsage, u); },
+    } as any);
+    await manager.getRecord(childId)!.promise;
+
+    expect(seen).toEqual([{ input: 10, output: 5, cacheWrite: 0, cost: 0.001 }]);
+    // And here is why the hook has to exist: the parent's record now carries the
+    // child's message on top of its own identical one, so anything that summed
+    // records would bill this session for two messages when one was sent. The
+    // double-booking stays — it is what makes a hidden child visible.
+    expect(manager.getRecord(parentId)!.lifetimeUsage).toEqual({ input: 20, output: 10, cacheWrite: 0, cost: 0.002 });
+  });
+});
+
 // Eager init removes the optional/required asymmetry that previously required
 // `??=` defaults at the callback sites and `?? 0` / `?? 1` at the read sites.
 describe("AgentManager — lifetime usage + compaction count are eagerly initialized", () => {
@@ -594,7 +663,7 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     });
     const record = manager.getRecord(id)!;
 
-    expect(record.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
+    expect(record.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0, cost: 0 });
     expect(record.compactionCount).toBe(0);
 
     manager.abort(id);
@@ -608,8 +677,8 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
       captured = opts;
       // Two assistant messages with usage
-      opts.onAssistantUsage?.({ input: 100, output: 50, cacheWrite: 10 });
-      opts.onAssistantUsage?.({ input: 200, output: 80, cacheWrite: 20 });
+      opts.onAssistantUsage?.({ input: 100, output: 50, cacheWrite: 10, cost: 0.01 });
+      opts.onAssistantUsage?.({ input: 200, output: 80, cacheWrite: 20, cost: 0.02 });
       return { responseText: "done", session: mockSession(), aborted: false, steered: false };
     });
 
@@ -621,7 +690,7 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
 
     expect(captured).toBeDefined();
     expect(manager.getRecord(id)!.lifetimeUsage).toEqual({
-      input: 300, output: 130, cacheWrite: 30,
+      input: 300, output: 130, cacheWrite: 30, cost: 0.03,
     });
   });
 
@@ -673,20 +742,20 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     await manager.getRecord(id)!.promise;
 
     // Pre-resume: lifetimeUsage from spawn was zero (mock didn't call onAssistantUsage)
-    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
+    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0, cost: 0 });
     expect(manager.getRecord(id)!.compactionCount).toBe(0);
 
     // Now resume — drive callbacks via the mocked resumeAgent
     const { resumeAgent: resumeMock } = await import("../src/agent-runner.js");
     vi.mocked(resumeMock).mockImplementation(async (_session, _prompt, opts: any) => {
-      opts.onAssistantUsage?.({ input: 70, output: 30, cacheWrite: 5 });
+      opts.onAssistantUsage?.({ input: 70, output: 30, cacheWrite: 5, cost: 0.007 });
       opts.onCompaction?.({ reason: "overflow", tokensBefore: 999 });
       return { text: "second" };
     });
 
     await manager.resume(id, "more");
 
-    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 70, output: 30, cacheWrite: 5 });
+    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 70, output: 30, cacheWrite: 5, cost: 0.007 });
     expect(manager.getRecord(id)!.compactionCount).toBe(1);
   });
 });
@@ -1688,7 +1757,7 @@ describe("AgentManager — background resume", () => {
     const onAssistantUsage = vi.fn();
     vi.mocked(resumeAgent).mockImplementation(async (_session, _prompt, opts: any) => {
       opts.onToolActivity?.({ type: "end", toolName: "grep" });
-      opts.onAssistantUsage?.({ input: 5, output: 3, cacheWrite: 0 });
+      opts.onAssistantUsage?.({ input: 5, output: 3, cacheWrite: 0, cost: 0 });
       return { text: "ok" };
     });
 
@@ -1700,10 +1769,10 @@ describe("AgentManager — background resume", () => {
     await record!.promise;
 
     expect(onToolActivity).toHaveBeenCalledWith({ type: "end", toolName: "grep" });
-    expect(onAssistantUsage).toHaveBeenCalledWith({ input: 5, output: 3, cacheWrite: 0 });
+    expect(onAssistantUsage).toHaveBeenCalledWith({ input: 5, output: 3, cacheWrite: 0, cost: 0 });
     // Internal record bookkeeping still runs alongside the forwarded callbacks.
     expect(manager.getRecord(id)!.toolUses).toBe(1);
-    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 5, output: 3, cacheWrite: 0 });
+    expect(manager.getRecord(id)!.lifetimeUsage).toEqual({ input: 5, output: 3, cacheWrite: 0, cost: 0 });
   });
 
   it("queues a background resume when the concurrency pool is full", async () => {

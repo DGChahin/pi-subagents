@@ -25,10 +25,12 @@ jobs:
   # isolated-provider test (test/e2e/isolated-provider.e2e.test.ts) skips itself on
   # pre-migration Pi and now actually runs there.
   #
-  # This job covers the other end: the earliest Pi the peerDependencies claim (`>=0.80.0`;
-  # 0.80.1 is the earliest published release satisfying it). It is NOT continue-on-error —
-  # a green run here is the only evidence behind that range, and if the floor genuinely
-  # can't be supported any more, the peer range is what should change.
+  # This job covers the other end: the earliest Pi the peerDependencies claim (`>=0.81.0`).
+  # It is NOT continue-on-error — a green run here is the only evidence behind that range,
+  # and if the floor genuinely can't be supported any more, the peer range is what should
+  # change. That is exactly what moved it from 0.80.0: pi only began folding
+  # `toolResult.usage` into `getSessionStats()` in 0.81.0, and the `reportUsage` setting is
+  # built on that, so every 0.80.x would have carried a setting that silently did nothing.
   compat-floor-pi:
     runs-on: ubuntu-latest
     steps:
@@ -39,7 +41,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install floor Pi
-        run: npm install --no-save @earendil-works/pi-coding-agent@0.80.1 @earendil-works/pi-ai@0.80.1 @earendil-works/pi-tui@0.80.1
+        run: npm install --no-save @earendil-works/pi-coding-agent@0.81.0 @earendil-works/pi-ai@0.81.0 @earendil-works/pi-tui@0.81.0
       - name: Typecheck against floor Pi
         run: npm run typecheck
       - name: Test suite against floor Pi

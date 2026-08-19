@@ -15,8 +15,8 @@ import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } 
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
 import type { AgentManager } from "../agent-manager.js";
 import type { AgentRecord } from "../types.js";
-import { getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, type Theme } from "./agent-widget.js";
+import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
+import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
 
 /** Widget key for the below-editor fleet list. */
@@ -94,6 +94,12 @@ export class FleetList {
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
+    /**
+     * Read live at render time. Whether each row shows an estimated cost after
+     * its token count. Defaults to off — the extension supplies the user's
+     * `showCost` setting.
+     */
+    private showCost: () => boolean = () => false,
   ) {}
 
   // ---- Lifecycle ----
@@ -311,6 +317,7 @@ export class FleetList {
           },
           keybindings,
           (message: string) => this.manager.steer(record.id, message),
+          this.showCost(),
         );
       },
       {
@@ -382,9 +389,11 @@ export class FleetList {
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
-    const tokens = getLifetimeTotal(this.agentActivity.get(record.id)?.lifetimeUsage ?? record.lifetimeUsage);
+    const usage = this.agentActivity.get(record.id)?.lifetimeUsage ?? record.lifetimeUsage;
+    const tokens = getLifetimeTotal(usage);
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const stats = `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`;
+    const cost = this.showCost() ? formatCost(getLifetimeCost(usage)) : "";
+    const stats = `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}${cost ? ` · ${cost}` : ""}`;
     const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
     return rightAlign(left, right, width);
   }

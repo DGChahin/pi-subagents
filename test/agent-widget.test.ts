@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
-import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatSessionTokens } from "../src/ui/agent-widget.js";
+import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
 describe("formatSessionTokens", () => {
   const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };
@@ -152,6 +152,154 @@ describe("AgentWidget", () => {
 // footer under-reports and — worse — the queue vanishes from the UI entirely.
 // That happens exactly when the concurrency limit is saturated, i.e. when the
 // queue is the thing the user most needs to see.
+describe("formatCost", () => {
+  it("keeps the precision that distinguishes one run from another", () => {
+    // Rounding to cents would print the same figure for a run that cost four
+    // times another — the band most single subagent runs fall in.
+    expect(formatCost(0.0042)).toBe("~$0.0042");
+    expect(formatCost(0.0123)).toBe("~$0.0123");
+    expect(formatCost(1.239)).toBe("~$1.24");
+  });
+
+  it("never pads a round figure with noise, nor cuts it below cents", () => {
+    expect(formatCost(0.05)).toBe("~$0.05");    // not ~$0.0500
+    expect(formatCost(0.4)).toBe("~$0.40");     // not ~$0.4
+    expect(formatCost(12)).toBe("~$12.00");
+  });
+
+  it("shows nothing when there is nothing to show", () => {
+    // Zero is what a model with no pricing data reports, so `$0.00` would claim
+    // a measurement that was never made.
+    expect(formatCost(0)).toBe("");
+    expect(formatCost(Number.NaN)).toBe("");
+    expect(formatCost(-1)).toBe("");
+  });
+
+  it("says a real but tiny cost is tiny, not zero", () => {
+    // The distinction the whole helper turns on: "measured, below what four
+    // decimals can show" must not render the same as "never measured".
+    expect(formatCost(0.00002)).toBe("<$0.0001");
+    expect(formatCost(0)).toBe("");
+  });
+
+  it("marks the figure as an estimate", () => {
+    // The tilde is the whole disclaimer — it sits beside exact token counts.
+    expect(formatCost(0.5).startsWith("~")).toBe(true);
+  });
+});
+
+describe("AgentWidget cost display", () => {
+  const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
+
+  function render(showCost: boolean, cost: number): string {
+    const agent = {
+      id: "a1",
+      type: "general-purpose",
+      description: "spending agent",
+      status: "running",
+      toolUses: 1,
+      startedAt: Date.now(),
+      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      compactionCount: 0,
+    };
+    const activity = new Map([["a1", {
+      activeTools: new Map(),
+      toolUses: 1,
+      responseText: "",
+      turnCount: 1,
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost },
+    } as AgentActivity]]);
+    const widget = new AgentWidget(
+      { listAgents: () => [agent] } as any,
+      activity,
+      () => "all",
+      () => showCost,
+    );
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.update();
+    return factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
+  }
+
+  it("shows the cost beside the token count when enabled", () => {
+    const line = render(true, 0.0042);
+    expect(line).toContain("1.2k token");
+    expect(line).toContain("~$0.0042");
+  });
+
+  it("shows no cost when disabled", () => {
+    const line = render(false, 0.0042);
+    expect(line).toContain("1.2k token");
+    expect(line).not.toContain("$");
+  });
+
+  it("shows no cost for an unpriced model, even when enabled", () => {
+    const line = render(true, 0);
+    expect(line).toContain("1.2k token");
+    expect(line).not.toContain("$");
+  });
+
+  it("keeps the cost visible after the agent finishes", () => {
+    // The activity entry is deleted the moment an agent finishes, so a finished
+    // line reading from it would drop the number precisely when the question
+    // "what did that cost" gets asked.
+    const finished = {
+      id: "a1", type: "general-purpose", description: "done agent", status: "completed",
+      toolUses: 2, startedAt: Date.now() - 1000, completedAt: Date.now(),
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost: 0.0042 },
+      compactionCount: 0,
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [finished] } as any, new Map(), () => "all", () => true,
+    );
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.update();
+    const out = factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
+
+    expect(out).toContain("done agent");
+    expect(out).toContain("~$0.0042");
+  });
+
+  it("shows stats for an agent nobody is tracking live", () => {
+    // Only Agent-tool spawns get an activity entry. A scheduled or RPC-started
+    // agent has none, and used to render with no tokens and no cost at all.
+    const running = {
+      id: "sched", type: "general-purpose", description: "scheduled agent", status: "running",
+      toolUses: 1, startedAt: Date.now(),
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost: 0.0042 },
+      compactionCount: 0,
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [running] } as any, new Map(), () => "all", () => true,
+    );
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.update();
+    const out = factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
+
+    expect(out).toContain("1.2k token");
+    expect(out).toContain("~$0.0042");
+  });
+
+  it("defaults to hiding it", () => {
+    const agent = {
+      id: "a1", type: "general-purpose", description: "d", status: "running",
+      toolUses: 0, startedAt: Date.now(), lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 }, compactionCount: 0,
+    };
+    const activity = new Map([["a1", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost: 0.5 },
+    } as AgentActivity]]);
+    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.update();
+    expect(factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n"))
+      .not.toContain("$");
+  });
+});
+
 describe("AgentWidget overflow accounting", () => {
   const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
 

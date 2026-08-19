@@ -192,6 +192,17 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
+  it("round-trips reportUsage and showCost; drops non-boolean", () => {
+    saveSettings({ reportUsage: true, showCost: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ reportUsage: true, showCost: true });
+    saveSettings({ reportUsage: false, showCost: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ reportUsage: false, showCost: false });
+    // The sanitizer is an allowlist: a key it does not name is dropped, and the
+    // setting silently never applies.
+    writeProject({ reportUsage: "on", showCost: 1 } as any);
+    expect(loadSettings(projectDir)).toEqual({});
+  });
+
   it("sanitize drops non-boolean schedulingEnabled silently", async () => {
     writeProject({ schedulingEnabled: "yes" } as any);
     expect(loadSettings(projectDir)).toEqual({});
@@ -497,11 +508,25 @@ describe("settings persistence", () => {
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
+        setReportUsage: vi.fn(),
+        setShowCost: vi.fn(),
       };
+    });
+
+    it("applies reportUsage and showCost", () => {
+      applySettings({ reportUsage: true, showCost: true }, appliers);
+      expect(appliers.setReportUsage).toHaveBeenCalledWith(true);
+      expect(appliers.setShowCost).toHaveBeenCalledWith(true);
+
+      applySettings({ reportUsage: false, showCost: false }, appliers);
+      expect(appliers.setReportUsage).toHaveBeenCalledWith(false);
+      expect(appliers.setShowCost).toHaveBeenCalledWith(false);
     });
 
     it("is a no-op on an empty settings object", () => {
       applySettings({}, appliers);
+      expect(appliers.setReportUsage).not.toHaveBeenCalled();
+      expect(appliers.setShowCost).not.toHaveBeenCalled();
       expect(appliers.setMaxConcurrent).not.toHaveBeenCalled();
       expect(appliers.setDefaultMaxTurns).not.toHaveBeenCalled();
       expect(appliers.setGraceTurns).not.toHaveBeenCalled();
@@ -703,6 +728,8 @@ describe("settings persistence", () => {
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
+        setReportUsage: vi.fn(),
+        setShowCost: vi.fn(),
       };
     });
 

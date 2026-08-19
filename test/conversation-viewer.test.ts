@@ -75,6 +75,39 @@ beforeEach(() => {
   wrapOverride = null;
 });
 
+describe("ConversationViewer cost display", () => {
+  /** The header line, with a cost of `cost` on the record and showCost `on`. */
+  function header(on: boolean, cost: number): string {
+    const record = mockRecord({
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost },
+    } as Partial<AgentRecord>);
+    const viewer = new ConversationViewer(
+      mockTui(30, 200), mockSession([]), record, undefined,
+      { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any,
+      vi.fn(), undefined, undefined, undefined, on,
+    );
+    return viewer.render(200).join("\n");
+  }
+
+  it("shows the cost beside the token count when enabled", () => {
+    // The viewer opens on finished agents, whose live activity entry is gone —
+    // so this reads the record, and would show nothing if it did not.
+    const out = header(true, 0.0042);
+    expect(out).toContain("1.2k token");
+    expect(out).toContain("~$0.0042");
+  });
+
+  it("shows no cost when disabled", () => {
+    const out = header(false, 0.0042);
+    expect(out).toContain("1.2k token");
+    expect(out).not.toContain("$");
+  });
+
+  it("shows no cost for a model with no pricing data", () => {
+    expect(header(true, 0)).not.toContain("$");
+  });
+});
+
 describe("ConversationViewer", () => {
   describe("render width safety", () => {
     const widths = [40, 80, 120, 216];

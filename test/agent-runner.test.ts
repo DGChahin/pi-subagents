@@ -525,11 +525,11 @@ describe("agent-runner usage callback wiring", () => {
     const { session, listeners } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
 
-    const seen: Array<{ input: number; output: number; cacheWrite: number }> = [];
+    const seen: Array<{ input: number; output: number; cacheWrite: number; cost?: number }> = [];
     session.prompt = vi.fn(async () => {
       // Two assistant messages over the run
-      emitMessageEnd(listeners, { input: 100, output: 50, cacheWrite: 10 });
-      emitMessageEnd(listeners, { input: 200, output: 80, cacheWrite: 20 });
+      emitMessageEnd(listeners, { input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: { total: 0.002 } });
+      emitMessageEnd(listeners, { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: { total: 0.004 } });
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
     });
 
@@ -538,9 +538,11 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
+    // cacheRead rides along even though the display total drops it (#38): the
+ // prefix is genuinely re-billed per call, and the parent-session report needs it.
     expect(seen).toEqual([
-      { input: 100, output: 50, cacheWrite: 10 },
-      { input: 200, output: 80, cacheWrite: 20 },
+      { input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: 0.002 },
+      { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: 0.004 },
     ]);
   });
 
@@ -550,7 +552,7 @@ describe("agent-runner usage callback wiring", () => {
 
     const seen: any[] = [];
     session.prompt = vi.fn(async () => {
-      emitMessageEnd(listeners, { input: 50 }); // output, cacheWrite missing
+      emitMessageEnd(listeners, { input: 50 }); // output, cacheWrite, cacheRead, cost missing
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
     });
 
@@ -559,7 +561,9 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
-    expect(seen).toEqual([{ input: 50, output: 0, cacheWrite: 0 }]);
+    // An unpriced model reports no `cost` object at all — 0, never undefined,
+    // so accumulators never have to special-case it.
+    expect(seen).toEqual([{ input: 50, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 }]);
   });
 
   it("runAgent skips the callback when message_end has no usage field", async () => {
@@ -582,7 +586,7 @@ describe("agent-runner usage callback wiring", () => {
     const seen: any[] = [];
 
     session.prompt = vi.fn(async () => {
-      emitMessageEnd(listeners, { input: 10, output: 20, cacheWrite: 5 });
+      emitMessageEnd(listeners, { input: 10, output: 20, cacheWrite: 5, cacheRead: 90, cost: { total: 0.001 } });
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "RESUMED" }] });
     });
 
@@ -590,7 +594,7 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
-    expect(seen).toEqual([{ input: 10, output: 20, cacheWrite: 5 }]);
+    expect(seen).toEqual([{ input: 10, output: 20, cacheWrite: 5, cacheRead: 90, cost: 0.001 }]);
   });
 
   it("forwards compaction_end events to onCompaction (only when not aborted)", async () => {
