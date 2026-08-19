@@ -3,11 +3,18 @@
 /**
  * Lifetime usage components, accumulated via `message_end` events. Survives
  * compaction (which replaces session.state.messages and would reset any
- * stats-derived sum). cacheRead is excluded because each turn's cacheRead is
- * the cumulative cached prefix re-read on that one call — summing across
- * turns counts the prefix N times. See issue #38.
+ * stats-derived sum). cacheRead is retained for card diagnostics but remains
+ * excluded from getLifetimeTotal because it is the cumulative cached prefix re-read
+ * on one call. Cost is the provider-reported equivalent for each message_end.
  */
-export type LifetimeUsage = { input: number; output: number; cacheWrite: number };
+export type UsageDelta = {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead?: number;
+  cost?: number;
+};
+export type LifetimeUsage = UsageDelta;
 
 /** Sum of lifetime usage components, or 0 if undefined. */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
@@ -15,10 +22,16 @@ export function getLifetimeTotal(u?: LifetimeUsage): number {
 }
 
 /** Add a usage delta into a target accumulator (mutates target). */
-export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
+export function addUsage(into: LifetimeUsage, delta: UsageDelta): void {
   into.input += delta.input;
   into.output += delta.output;
   into.cacheWrite += delta.cacheWrite;
+  if (delta.cacheRead !== undefined || into.cacheRead !== undefined) {
+    into.cacheRead = (into.cacheRead ?? 0) + (delta.cacheRead ?? 0);
+  }
+  if (delta.cost !== undefined || into.cost !== undefined) {
+    into.cost = (into.cost ?? 0) + (delta.cost ?? 0);
+  }
 }
 
 /** Minimal shape we read from upstream `getSessionStats()`. */

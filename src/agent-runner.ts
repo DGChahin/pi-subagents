@@ -27,6 +27,7 @@ import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
+import type { UsageDelta } from "./usage.js";
 
 /**
  * Tool names registered by THIS extension. Single source of truth so the
@@ -388,6 +389,8 @@ export interface RunOptions {
   onToolActivity?: (activity: ToolActivity) => void;
   /** Called on streaming text deltas from the assistant response. */
   onTextDelta?: (delta: string, fullText: string) => void;
+  /** Called on streaming thinking deltas from the assistant response. */
+  onThinkingDelta?: (delta: string, fullThinking: string) => void;
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
@@ -396,7 +399,7 @@ export interface RunOptions {
    * Lets callers maintain a lifetime accumulator that survives compaction
    * (which replaces session.state.messages and resets stats-derived sums).
    */
-  onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+  onAssistantUsage?: (usage: UsageDelta) => void;
   /**
    * Called when the session successfully compacts. `tokensBefore` is upstream's
    * pre-compaction context size estimate. Aborted compactions don't fire.
@@ -906,6 +909,7 @@ export async function runAgent(
   let aborted = false;
 
   let currentMessageText = "";
+  let currentThinkingText = "";
   const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "turn_end") {
       turnCount++;
@@ -922,10 +926,15 @@ export async function runAgent(
     }
     if (event.type === "message_start") {
       currentMessageText = "";
+      currentThinkingText = "";
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       currentMessageText += event.assistantMessageEvent.delta;
       options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
+    }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+      currentThinkingText += event.assistantMessageEvent.delta;
+      options.onThinkingDelta?.(event.assistantMessageEvent.delta, currentThinkingText);
     }
     if (event.type === "tool_execution_start") {
       options.onToolActivity?.({ type: "start", toolName: event.toolName });
@@ -935,11 +944,16 @@ export async function runAgent(
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       const u = (event.message as any).usage;
-      if (u) options.onAssistantUsage?.({
-        input: u.input ?? 0,
-        output: u.output ?? 0,
-        cacheWrite: u.cacheWrite ?? 0,
-      });
+      if (u) {
+        const usage: UsageDelta = {
+          input: u.input ?? 0,
+          output: u.output ?? 0,
+          cacheWrite: u.cacheWrite ?? 0,
+          ...(u.cacheRead !== undefined ? { cacheRead: u.cacheRead } : {}),
+          ...(u.cost?.total !== undefined ? { cost: u.cost.total } : {}),
+        };
+        options.onAssistantUsage?.(usage);
+      }
     }
     if (event.type === "compaction_end" && !event.aborted && event.result) {
       options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
@@ -981,7 +995,10 @@ export async function resumeAgent(
   prompt: string,
   options: {
     onToolActivity?: (activity: ToolActivity) => void;
-    onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+    onTextDelta?: (delta: string, fullText: string) => void;
+    onThinkingDelta?: (delta: string, fullThinking: string) => void;
+    onTurnEnd?: (turnCount: number) => void;
+    onAssistantUsage?: (usage: UsageDelta) => void;
     onCompaction?: (info: { reason: "manual" | "threshold" | "overflow"; tokensBefore: number }) => void;
     signal?: AbortSignal;
   } = {},
@@ -993,17 +1010,41 @@ export async function resumeAgent(
   const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
-  const unsubEvents = (options.onToolActivity || options.onAssistantUsage || options.onCompaction)
+  let currentMessageText = "";
+  let currentThinkingText = "";
+  let turnCount = 0;
+  const unsubEvents = (options.onToolActivity || options.onTextDelta || options.onThinkingDelta || options.onTurnEnd || options.onAssistantUsage || options.onCompaction)
     ? session.subscribe((event: AgentSessionEvent) => {
+        if (event.type === "turn_end") {
+          turnCount++;
+          options.onTurnEnd?.(turnCount);
+        }
+        if (event.type === "message_start") {
+          currentMessageText = "";
+          currentThinkingText = "";
+        }
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          currentMessageText += event.assistantMessageEvent.delta;
+          options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
+        }
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+          currentThinkingText += event.assistantMessageEvent.delta;
+          options.onThinkingDelta?.(event.assistantMessageEvent.delta, currentThinkingText);
+        }
         if (event.type === "tool_execution_start") options.onToolActivity?.({ type: "start", toolName: event.toolName });
         if (event.type === "tool_execution_end") options.onToolActivity?.({ type: "end", toolName: event.toolName });
         if (event.type === "message_end" && event.message.role === "assistant") {
           const u = (event.message as any).usage;
-          if (u) options.onAssistantUsage?.({
-            input: u.input ?? 0,
-            output: u.output ?? 0,
-            cacheWrite: u.cacheWrite ?? 0,
-          });
+          if (u) {
+            const usage: UsageDelta = {
+              input: u.input ?? 0,
+              output: u.output ?? 0,
+              cacheWrite: u.cacheWrite ?? 0,
+              ...(u.cacheRead !== undefined ? { cacheRead: u.cacheRead } : {}),
+              ...(u.cost?.total !== undefined ? { cost: u.cost.total } : {}),
+            };
+            options.onAssistantUsage?.(usage);
+          }
         }
         if (event.type === "compaction_end" && !event.aborted && event.result) {
           options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });

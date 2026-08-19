@@ -54,6 +54,8 @@ export interface AgentActivity {
   activeTools: Map<string, string>;
   toolUses: number;
   responseText: string;
+  /** Latest streamed thinking text, when the provider exposes it. */
+  thinkingText?: string;
   session?: SessionLike;
   /** Current turn count. */
   turnCount: number;

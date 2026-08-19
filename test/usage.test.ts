@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getLifetimeTotal, getSessionContextPercent, getSessionTokens } from "../src/usage.js";
+import { addUsage, getLifetimeTotal, getSessionContextPercent, getSessionTokens } from "../src/usage.js";
 
 // Regression for issue #38 — token semantics + context indicator
 describe("usage", () => {
@@ -109,6 +109,16 @@ describe("usage", () => {
 
       // input + output + cacheWrite = total — by construction, no drift
       expect(usage.input + usage.output + usage.cacheWrite).toBe(getLifetimeTotal(usage));
+    });
+  });
+  describe("addUsage", () => {
+    it("accumulates cache diagnostics and provider cost without changing billed total", () => {
+      const usage = { input: 100, output: 20, cacheWrite: 5 };
+      addUsage(usage, { input: 10, output: 4, cacheRead: 500, cacheWrite: 2, cost: 0.0123 });
+      expect(usage).toEqual({
+        input: 110, output: 24, cacheWrite: 7, cacheRead: 500, cost: 0.0123,
+      });
+      expect(getLifetimeTotal(usage)).toBe(141);
     });
   });
 });
