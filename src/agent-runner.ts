@@ -314,6 +314,19 @@ export function getDefaultMaxTurns(): number | undefined { return defaultMaxTurn
 export function setDefaultMaxTurns(n: number | undefined): void { defaultMaxTurns = normalizeMaxTurns(n); }
 
 /**
+ * The turn limit a run of `type` will actually enforce: an explicit value if the
+ * caller supplied one, else the agent's own `max_turns`, else the project
+ * default. `undefined` = unlimited.
+ *
+ * Exported because the widget's turn counter (`↻3≤20`) has to predict this
+ * before the run starts, and a second copy of the expression would drift from
+ * the one below that enforces it.
+ */
+export function resolveEffectiveMaxTurns(type: string, explicit?: number): number | undefined {
+  return normalizeMaxTurns(explicit ?? getAgentConfig(type)?.maxTurns ?? defaultMaxTurns);
+}
+
+/**
  * Project default for `persist_session`, from the `rememberAgents` setting.
  * On by default: a persisted session is what lets `@handle` reopen an agent's
  * conversation after its record has been evicted, which is the whole point of
@@ -965,7 +978,7 @@ export async function runAgent(
 
   // Track turns for graceful max_turns enforcement
   let turnCount = 0;
-  const maxTurns = normalizeMaxTurns(options.maxTurns ?? agentConfig?.maxTurns ?? defaultMaxTurns);
+  const maxTurns = resolveEffectiveMaxTurns(type, options.maxTurns);
   let softLimitReached = false;
   let aborted = false;
 

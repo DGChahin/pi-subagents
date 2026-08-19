@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
 import type { AgentConfig, AgentRecord } from "../src/types.js";
-import { getDisplayName } from "../src/ui/agent-widget.js";
+import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
 import { FleetList, type FleetUICtx, formatFleetElapsed, formatFleetTokens } from "../src/ui/fleet-list.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
@@ -509,9 +509,9 @@ describe("FleetList overlay lifecycle", () => {
 describe("FleetList cost display", () => {
   const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
 
-  function row(showCost: boolean, cost: number): string {
+  function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
     const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
-    const fleet = new FleetList(fakeManager([record]), new Map(), () => showCost);
+    const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
     let factory: any;
     fleet.setUICtx({
       setWidget: (_k: string, c: any) => { factory = c; },
@@ -533,5 +533,21 @@ describe("FleetList cost display", () => {
   it("shows no cost when disabled, and none for an unpriced model", () => {
     expect(row(false, 0.0042)).not.toContain("$");
     expect(row(true, 0)).not.toContain("$");
+  });
+
+  it("reads the record, so the figures do not change when the agent finishes", () => {
+    // Spend used to come from the live activity tracker while an agent ran and
+    // from its record once the tracker was deleted. The two disagree: only the
+    // record carries a nested child's spend (nested-tools folds it into every
+    // ancestor), so the number jumped upward at completion.
+    // The stale shape on purpose: an activity entry carrying figures of its own
+    // is what the old fallback preferred, so a row that still renders the
+    // record's numbers proves the tracker is no longer consulted for spend.
+    const tracked = new Map<string, AgentActivity>([["a1", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      lifetimeUsage: { input: 1, output: 1, cacheWrite: 0, cost: 0.9 },
+    } as unknown as AgentActivity]]);
+
+    expect(row(true, 0.0042, tracked)).toBe(row(true, 0.0042));
   });
 });

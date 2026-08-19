@@ -389,10 +389,12 @@ export class FleetList {
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
-    const usage = this.agentActivity.get(record.id)?.lifetimeUsage ?? record.lifetimeUsage;
-    const tokens = getLifetimeTotal(usage);
+    // The record, not the activity tracker — see the note in AgentWidget's
+    // running line: only the record carries a nested child's spend, and only it
+    // outlives the agent.
+    const tokens = getLifetimeTotal(record.lifetimeUsage);
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const cost = this.showCost() ? formatCost(getLifetimeCost(usage)) : "";
+    const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
     const stats = `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}${cost ? ` · ${cost}` : ""}`;
     const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
     return rightAlign(left, right, width);

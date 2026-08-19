@@ -19,7 +19,7 @@ import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
+import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
@@ -59,7 +59,7 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
-import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
 
 // ---- Shared helpers ----
@@ -99,7 +99,6 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     maxTurns,
     responseText: "",
     session: undefined,
-    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
   };
 
   const callbacks = {
@@ -125,8 +124,9 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     onSessionCreated: (session: any) => {
       state.session = session;
     },
-    onAssistantUsage: (usage: LifetimeUsage) => {
-      addUsage(state.lifetimeUsage, usage);
+    // Spend is accumulated on the AgentRecord (agent-manager), which is what
+    // every surface reads; this callback exists here only to repaint on it.
+    onAssistantUsage: (_usage: LifetimeUsage) => {
       onStreamUpdate?.();
     },
   };
@@ -610,7 +610,27 @@ export default function (pi: ExtensionAPI) {
     reloadCustomAgents();
     const dispatch = resolveSpawnType(type);
     if (!dispatch.ok) throw new Error(dispatch.message);
-    return manager.spawn(piRef, ctxRef, dispatch.type, prompt, options);
+    // Every programmatic spawn lands here — cross-extension RPC, both `@handle`
+    // mention paths, and the `Symbol.for("pi-subagents:manager")` registry — and
+    // none came through the Agent tool, which is where the UI activity tracker is
+    // otherwise created. Without one the widget and FleetView have no tool name
+    // and no turn count, so the row reads `thinking…` for the agent's whole life
+    // while the header's tool-use count climbs beside it (#181). Double-tracking
+    // is not possible: the Agent tool calls `manager.spawn` directly. The tracker
+    // callbacks are the funnel's own — a caller's are not honoured, since a
+    // half-wired tracker renders worse than none.
+    //
+    // The turn limit is resolved rather than read off `options`, which a mention
+    // spawn deliberately omits so the agent's own config can decide: a tracker
+    // built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
+    // Like the tool's own, it is a prediction — editing the agent file mid-run
+    // leaves the displayed ceiling stale.
+    const { state, callbacks } = createActivityTracker(resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns));
+    // Repaints are left to the manager's `onStart` callback, which already starts
+    // the widget/fleet timers for agents that enter this way.
+    const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, ...callbacks });
+    agentActivity.set(id, state);
+    return id;
   };
 
   const spawnTopLevel = (piRef: any, ctxRef: any, type: string, prompt: string, options: any) => {
@@ -1925,11 +1945,15 @@ Terse command-style prompts produce shallow, generic work.
       let fgId: string | undefined;
 
       const streamUpdate = () => {
+        // Spend from the record, everything else from the live tracker. `fgId`
+        // is set in onSessionCreated below, which fires before the first
+        // assistant message — so nothing is spent while this reads zero.
+        const fgRecord = fgId ? manager.getRecord(fgId) : undefined;
         const details: AgentDetails = {
           ...detailBase,
           toolUses: fgState.toolUses,
-          tokens: formatLifetimeTokens(fgState),
-          cost: getLifetimeCost(fgState.lifetimeUsage),
+          tokens: fgRecord ? formatLifetimeTokens(fgRecord) : "",
+          cost: fgRecord ? getLifetimeCost(fgRecord.lifetimeUsage) : 0,
           turnCount: fgState.turnCount,
           maxTurns: fgState.maxTurns,
           durationMs: Date.now() - startedAt,
@@ -2012,8 +2036,9 @@ Terse command-style prompts produce shallow, generic work.
         }
       }
 
-      // Get final token count
-      const tokenText = formatLifetimeTokens(fgState);
+      // Get final token count — from the record, like the cost below it, so the
+      // two describe the same work when the agent delegated to nested children.
+      const tokenText = formatLifetimeTokens(record);
 
       const details = buildDetails(detailBase, record, fgState, { tokens: tokenText });
 

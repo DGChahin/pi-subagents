@@ -158,15 +158,15 @@ export class ConversationViewer implements Component {
     const headerParts: string[] = [duration];
     const toolUses = this.activity?.toolUses ?? this.record.toolUses;
     if (toolUses > 0) headerParts.unshift(`${toolUses} tool${toolUses === 1 ? "" : "s"}`);
-    // The viewer opens on finished agents too, whose activity entry is long
-    // gone — the record is the only place their totals survive.
-    const usage = this.activity?.lifetimeUsage ?? this.record.lifetimeUsage;
-    const tokens = getLifetimeTotal(usage);
+    // Spend from the record, context from the live session: the record is the
+    // only total that survives the agent finishing and the only one carrying a
+    // nested child's spend.
+    const tokens = getLifetimeTotal(this.record.lifetimeUsage);
     if (tokens > 0) {
       const percent = getSessionContextPercent(this.activity?.session);
       headerParts.push(formatSessionTokens(tokens, percent, th, this.record.compactionCount));
     }
-    const cost = this.showCost ? formatCost(getLifetimeCost(usage)) : "";
+    const cost = this.showCost ? formatCost(getLifetimeCost(this.record.lifetimeUsage)) : "";
     if (cost) headerParts.push(cost);
 
     lines.push(row(

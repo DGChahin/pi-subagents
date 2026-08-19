@@ -63,7 +63,6 @@ describe("AgentWidget", () => {
       toolUses: 0,
       responseText: "",
       turnCount: 1,
-      lifetimeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
   }
 
@@ -199,16 +198,19 @@ describe("AgentWidget cost display", () => {
       status: "running",
       toolUses: 1,
       startedAt: Date.now(),
-      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost },
       compactionCount: 0,
     };
+    // Carries figures of its own, in the shape the tracker used to have: spend
+    // is read from the record now, so these must not reach the line. Only the
+    // record accumulates a nested child's spend, and only it outlives the run.
     const activity = new Map([["a1", {
       activeTools: new Map(),
       toolUses: 1,
       responseText: "",
       turnCount: 1,
-      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost },
-    } as AgentActivity]]);
+      lifetimeUsage: { input: 9, output: 9, cacheWrite: 0, cost: 0.9 },
+    } as unknown as AgentActivity]]);
     const widget = new AgentWidget(
       { listAgents: () => [agent] } as any,
       activity,
@@ -262,8 +264,8 @@ describe("AgentWidget cost display", () => {
   });
 
   it("shows stats for an agent nobody is tracking live", () => {
-    // Only Agent-tool spawns get an activity entry. A scheduled or RPC-started
-    // agent has none, and used to render with no tokens and no cost at all.
+    // A scheduled agent has no activity entry — it spawns through the manager
+    // directly — and used to render with no tokens and no cost at all.
     const running = {
       id: "sched", type: "general-purpose", description: "scheduled agent", status: "running",
       toolUses: 1, startedAt: Date.now(),
@@ -285,11 +287,11 @@ describe("AgentWidget cost display", () => {
   it("defaults to hiding it", () => {
     const agent = {
       id: "a1", type: "general-purpose", description: "d", status: "running",
-      toolUses: 0, startedAt: Date.now(), lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 }, compactionCount: 0,
+      toolUses: 0, startedAt: Date.now(),
+      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost: 0.5 }, compactionCount: 0,
     };
     const activity = new Map([["a1", {
       activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
-      lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost: 0.5 },
     } as AgentActivity]]);
     const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
     let factory: any;
@@ -330,7 +332,6 @@ describe("AgentWidget overflow accounting", () => {
       toolUses: 0,
       responseText: "",
       turnCount: 1,
-      lifetimeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } as AgentActivity]));
     const widget = new AgentWidget({ listAgents: () => agents } as any, activity, () => "all");
     let factory: any;
@@ -417,7 +418,6 @@ describe("AgentWidget overflow accounting", () => {
       toolUses: 0,
       responseText: "",
       turnCount: 1,
-      lifetimeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } as AgentActivity]]);
     const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
     let factory: any;
