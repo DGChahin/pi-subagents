@@ -136,6 +136,9 @@ async function runWithAgents(
     ...options,
     cwd,
     respond,
+    // Pinned faux: every case here scripts exact tool calls, so the pre-publish
+    // smoke's global `PI_E2E_LIVE=1` must not swap a real model in.
+    live: false,
     beforeRun: () => registerAgents(loadCustomAgents(cwd)),
   });
   return { run, cwd };
