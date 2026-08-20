@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
@@ -32,6 +32,7 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { suppressToolExecutionRows } from "./tool-row-suppression.js";
 import { type AgentConfig, type AgentInvocation, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type WidgetMode } from "./types.js";
 import {
   ACTIVITY_ENTRY,
@@ -80,13 +81,6 @@ const hiddenToolRenderers = {
   renderCall: () => new Text("", 0, 0),
   renderResult: () => new Text("", 0, 0),
 };
-
-function registerHiddenFileToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI): void {
-  if (ctx.mode !== "tui") return;
-  pi.registerTool({ ...createReadToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-  pi.registerTool({ ...createWriteToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-  pi.registerTool({ ...createEditToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-}
 
 export function renderRunningAgentStatus(
   frame: string,
@@ -230,6 +224,7 @@ export default function (pi: ExtensionAPI) {
 
   const activityCards = new ActivityCardStore();
   const activityTicker = new ActivityCardTicker();
+  let restoreToolExecutionRows: (() => void) | undefined;
   if (typeof pi.registerEntryRenderer === "function") {
     pi.registerEntryRenderer<ActivityCardData>(ACTIVITY_ENTRY, (entry, _options, theme) => {
       const data = entry.data;
@@ -313,8 +308,8 @@ export default function (pi: ExtensionAPI) {
     mainCardAppendTimer = undefined;
   }
 
-  // Pi exposes no renderer-only override for built-in tools; collapse their rows
-  // for this session and restore the user's setting on switch or shutdown.
+  // Keep Pi's compact tool setting as a fallback if the temporary global row
+  // suppression patch cannot attach, then restore it on switch or shutdown.
   function suppressMainToolOutput(ctx: ExtensionContext): void {
     if (mainToolsExpansionSuppressed) return;
     mainToolsUI = ctx.ui;
@@ -941,7 +936,8 @@ export default function (pi: ExtensionAPI) {
     mainCardAppended = false;
     mainPromptExpected = false;
     mainSessionActive = true;
-    registerHiddenFileToolRenderers(ctx, pi);
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = ctx.mode === "tui" ? suppressToolExecutionRows() : undefined;
     suppressMainToolOutput(ctx);
     currentCtx = ctx;
     manager.clearCompleted(true);
@@ -1072,6 +1068,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_switch", () => {
     sessionGeneration += 1;
     currentCtx = undefined;
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = undefined;
     restoreMainToolOutput();
     clearPendingCompletionDelivery();
     clearMainCardAppendTimer();
@@ -1110,6 +1108,8 @@ export default function (pi: ExtensionAPI) {
       delete (globalThis as any)[MANAGER_KEY];
     }
     clearPendingCompletionDelivery();
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = undefined;
     restoreMainToolOutput();
     activityTicker.dispose();
     clearMainCardAppendTimer();

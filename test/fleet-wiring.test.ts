@@ -12,6 +12,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -22,8 +23,21 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 
+const BUILTIN_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
+const TOOL_ROW_PATCH_STATE_KEY = Symbol.for("pi-subagents:tool-row-suppression");
+const originalToolRowRender = ToolExecutionComponent.prototype.render;
+
+function restoreToolRowPatchState(): void {
+  ToolExecutionComponent.prototype.render = originalToolRowRender;
+  delete (globalThis as any)[TOOL_ROW_PATCH_STATE_KEY];
+}
+
 function makePi() {
-  const tools = new Map<string, any>();
+  const existingTools = new Map<string, any>([
+    ...BUILTIN_TOOL_NAMES.map(name => [name, { name, owner: "pi" }] as const),
+    ["web_search", { name: "web_search", owner: "foreign-extension" }],
+  ]);
+  const tools = new Map(existingTools);
   const lifecycle = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn(),
@@ -37,7 +51,7 @@ function makePi() {
     sendMessage: vi.fn(),
     getThinkingLevel: vi.fn(() => "high"),
   } as any;
-  return { pi, tools, lifecycle };
+  return { pi, tools, lifecycle, existingTools };
 }
 
 /** A UI context with the surfaces the widget + fleet touch; setWidget is spied. */
@@ -81,6 +95,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
+    restoreToolRowPatchState();
     tmpDir = mkdtempSync(join(tmpdir(), "pi-fleet-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-fleet-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -96,6 +111,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
   });
 
   afterEach(() => {
+    restoreToolRowPatchState();
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
@@ -145,7 +161,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(ui.setWidget).toHaveBeenCalledWith("fleet", undefined); // dispose cleared it
   });
   it("appends and finalizes an inline card for the main context agent", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle, existingTools } = makePi();
     subagentsExtension(pi);
     const ui = uiCtx();
     const ctx = ctxWith(ui);
@@ -155,15 +171,15 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(transformer?.("thinking", { messageType: "assistant-thinking", isStreaming: false })).toBe("");
     expect(transformer?.("stream", { messageType: "assistant", isStreaming: true })).toBe("");
     expect(transformer?.("answer", { messageType: "assistant", isStreaming: false })).toBe("answer");
-    expect(tools.get("Agent")).toMatchObject({ renderShell: "self" });
-    expect(tools.get("get_subagent_result")).toMatchObject({ renderShell: "self" });
-    expect(tools.get("steer_subagent")).toMatchObject({ renderShell: "self" });
-    expect(tools.get("Agent").renderCall({}, {} as any).render(80)).toEqual([]);
-    expect(tools.get("Agent").renderResult({}, {}, {} as any).render(80)).toEqual([]);
-    for (const name of ["read", "write", "edit"]) {
-      expect(tools.get(name)).toMatchObject({ renderShell: "self" });
-      expect(tools.get(name).renderCall({}, {}, {} as any).render(80)).toEqual([]);
-      expect(tools.get(name).renderResult({}, {}, {} as any, {} as any).render(80)).toEqual([]);
+    for (const name of ["Agent", "get_subagent_result", "steer_subagent"]) {
+      const tool = tools.get(name);
+      expect(tool).toMatchObject({ renderShell: "self" });
+      expect(tool.renderCall().render(80)).toEqual([]);
+      expect(tool.renderResult().render(80)).toEqual([]);
+    }
+    for (const name of BUILTIN_TOOL_NAMES) {
+      expect(tools.get(name)).toBe(existingTools.get(name));
+      expect(vi.mocked(pi.registerTool).mock.calls.some(([tool]) => tool.name === name)).toBe(false);
     }
     await lifecycle.get("before_agent_start")?.({ prompt: "inspect" }, ctx);
     await lifecycle.get("agent_start")?.({}, ctx);
@@ -194,6 +210,39 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(entries.at(-1)?.[1]).toMatchObject({ status: "completed", toolUses: 1, turnCount: 1 });
     await lifecycle.get("session_shutdown")?.({}, ctx);
     expect(ui.setToolsExpanded).toHaveBeenCalledWith(true);
+  });
+  it("suppresses built-in and foreign TUI rows without replacing their tool definitions", async () => {
+    const { pi, tools, lifecycle, existingTools } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx());
+
+    try {
+      await lifecycle.get("session_start")?.({}, ctx);
+      expect(ToolExecutionComponent.prototype.render).not.toBe(originalToolRowRender);
+      for (const name of ["bash", "web_search"]) {
+        const row = { toolName: name } as unknown as ToolExecutionComponent;
+        expect(ToolExecutionComponent.prototype.render.call(row, 80)).toEqual([]);
+        expect(tools.get(name)).toBe(existingTools.get(name));
+      }
+    } finally {
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+  it.each(["session_before_switch", "session_shutdown"] as const)("%s restores the original tool-row renderer", async event => {
+    const { pi, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx());
+    let shutdown = false;
+
+    try {
+      await lifecycle.get("session_start")?.({}, ctx);
+      expect(ToolExecutionComponent.prototype.render).not.toBe(originalToolRowRender);
+      await lifecycle.get(event)?.({}, ctx);
+      shutdown = event === "session_shutdown";
+      expect(ToolExecutionComponent.prototype.render).toBe(originalToolRowRender);
+    } finally {
+      if (!shutdown) await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
   });
   it("appends a card for a continuation without a new user message", async () => {
     const { pi, lifecycle } = makePi();
