@@ -70,6 +70,16 @@ describe("activity cards", () => {
     expect(output).toContain("thinking: Reviewing the renderer lifecycle across multiple phases");
   });
 
+  it("shows unknown tool activity in the card instead of requiring a tool-specific label", () => {
+    const record = makeRecord();
+    const store = new ActivityCardStore();
+    store.begin(record);
+    store.apply(record, { type: "tool", activity: { type: "start", toolName: "web_search" } });
+
+    const component = createActivityCardComponent(store, toActivityCardData(record), theme);
+    expect(component.render(160).join("\n")).toContain("web_search");
+  });
+
   it("uses a fallback activity when no thinking or response text is available", () => {
     const record = makeRecord({ invocation: undefined });
     const store = new ActivityCardStore();
