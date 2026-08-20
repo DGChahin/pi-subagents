@@ -13,6 +13,7 @@ vi.mock("../src/worktree.js", () => ({
   checkpointWorktree: vi.fn(),
   cleanupWorktree: vi.fn(),
   pruneWorktrees: vi.fn(),
+  isWorktreeIsolationEnabled: vi.fn(() => true),
 }));
 
 import { AgentManager } from "../src/agent-manager.js";
@@ -129,7 +130,7 @@ describe("AgentManager revision lifecycle", () => {
     initialCallbacks?.onToolActivity?.({ type: "end", toolName: "old-tool" });
     initialCallbacks?.onAssistantUsage?.({ input: 10, output: 5, cacheWrite: 1 });
     expect(record.toolUses).toBe(0);
-    expect(record.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
+    expect(record.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0, cost: 0 });
 
     generation = 3;
     resolveBlocker?.({

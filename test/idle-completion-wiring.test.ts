@@ -174,7 +174,7 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     expect(first.terminate).toBe(true);
     await flush();
     const consumed = await harness.tools.get("get_subagent_result")!.execute(
-      "get-first", { agent_id: firstId }, undefined, undefined, context,
+      "get-first", { agent_id: firstId, wait: true }, undefined, undefined, context,
     );
     expect(resultText(consumed)).toContain("first result");
 
@@ -188,7 +188,7 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     expect(resumeAgent).not.toHaveBeenCalled();
 
     const duplicate = await spawn(harness.tools, "duplicate", context, { resume: firstId });
-    expect(resultText(duplicate)).toContain("already queued");
+    expect(resultText(duplicate)).toContain("still queued");
     expect(duplicate.terminate).toBeUndefined();
 
     finishBlocker?.(agentResult("blocker done"));
@@ -326,11 +326,11 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     resolvers.get("batch-b")?.(agentResult("batch-b result"));
     await microflush();
     await harness.tools.get("get_subagent_result")!.execute(
-      "get-batch-a", { agent_id: batchA }, undefined, undefined, context,
+      "get-batch-a", { agent_id: batchA, wait: true }, undefined, undefined, context,
     );
     await vi.advanceTimersByTimeAsync(100);
     await harness.tools.get("get_subagent_result")!.execute(
-      "get-batch-b", { agent_id: batchB }, undefined, undefined, context,
+      "get-batch-b", { agent_id: batchB, wait: true }, undefined, undefined, context,
     );
     await vi.advanceTimersByTimeAsync(200);
 
@@ -340,12 +340,12 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     resolvers.get("group-a")?.(agentResult("group-a result"));
     await microflush();
     await harness.tools.get("get_subagent_result")!.execute(
-      "get-group-a", { agent_id: groupA }, undefined, undefined, context,
+      "get-group-a", { agent_id: groupA, wait: true }, undefined, undefined, context,
     );
     resolvers.get("group-b")?.(agentResult("group-b result"));
     await microflush();
     await harness.tools.get("get_subagent_result")!.execute(
-      "get-group-b", { agent_id: groupB }, undefined, undefined, context,
+      "get-group-b", { agent_id: groupB, wait: true }, undefined, undefined, context,
     );
     await vi.advanceTimersByTimeAsync(200);
 

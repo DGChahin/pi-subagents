@@ -4,7 +4,10 @@
  * failure, not as "completed" with an empty (or stale) result.
  *
  * Full-stack: real pi loader + real extension + real runAgent + real child
- * sessions on a faux model.
+ * sessions on a faux model. Faux is the point, not a shortcut — the scenario is
+ * a provider error with zero content, which no live model will produce on
+ * request. Each run pins `live: false` so the pre-publish smoke's global
+ * `PI_E2E_LIVE=1` can't swap a real model in and turn this suite red.
  */
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -16,12 +19,16 @@ import {
   runPrintMode,
 } from "./helpers/print-mode-runner.js";
 
-/** Text of the parent's Agent tool result — what the orchestrator LLM sees. */
-function agentToolResult(session: AgentSession): string {
-  const msg = [...session.messages].reverse().find(
-    (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
+/** Full stored output fetched by the parent after the completion callback. */
+function subagentResult(session: AgentSession): string {
+  const message = [...session.messages].reverse().find(
+    (item) =>
+      item.role === "toolResult" &&
+      (item as { toolName?: string }).toolName === "get_subagent_result",
   );
-  return ((msg?.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
+  return ((message?.content ?? []) as Array<{ text?: string }>)
+    .map((block) => block.text ?? "")
+    .join("");
 }
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -45,11 +52,12 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
         // The child's one and only turn: provider error, zero content.
         subagent: () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
       }),
+      live: false,
     });
 
-    // DESIRED: the orchestrator sees a failure naming the provider error —
-    // not a clean success reading "No output.".
-    const toolResult = agentToolResult(run.parentSession);
+    // DESIRED: after the callback, retrieval exposes the provider error — not
+    // a clean success reading "No output.".
+    const toolResult = subagentResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).not.toContain("No output.");
   });
@@ -72,12 +80,13 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
               ]);
         },
       }),
+      live: false,
     });
 
     // The orchestrator sees the failure (not the earlier text as a clean
     // answer), AND the partial output is salvaged, clearly labeled as
     // pre-failure so it can't be mistaken for the final answer.
-    const toolResult = agentToolResult(run.parentSession);
+    const toolResult = subagentResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).toContain("Partial output before the failure:");
     expect(toolResult).toContain("EARLIER-PARTIAL-TEXT");
@@ -93,9 +102,10 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
         parentFinal: "parent done",
         subagent: () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
       }),
+      live: false,
     });
 
-    const toolResult = agentToolResult(run.parentSession);
+    const toolResult = subagentResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).not.toContain("Partial output before the failure:");
   });

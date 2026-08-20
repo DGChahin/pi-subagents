@@ -388,4 +388,49 @@ describe("buildAgentPrompt", () => {
       }
     });
   });
+
+  // #187: the inherited parent prompt names the main checkout as cwd, so a
+  // worktree agent needs to be told which of the two paths is really its own.
+  describe("worktree isolation block", () => {
+    function worktreeConfig(promptMode: "append" | "replace"): AgentConfig {
+      return {
+        name: "test-agent",
+        description: "Test",
+        builtinToolNames: [],
+        extensions: true,
+        skills: true,
+        systemPrompt: "Custom instructions.",
+        promptMode,
+        inheritContext: false,
+        runInBackground: false,
+        isolated: false,
+      };
+    }
+
+    it("is absent without a worktree base", () => {
+      for (const promptMode of ["replace", "append"] as const) {
+        const prompt = buildAgentPrompt(worktreeConfig(promptMode), "/wt/copy", env, "Parent.", {});
+        expect(prompt).not.toContain("<worktree_isolation>");
+      }
+    });
+
+    it("names the parent checkout and follows the env block in both modes", () => {
+      for (const promptMode of ["replace", "append"] as const) {
+        const prompt = buildAgentPrompt(worktreeConfig(promptMode), "/wt/copy", env, "Parent.", {
+          worktreeBase: "/repo",
+        });
+        expect(prompt).toContain("isolated git worktree copy of /repo");
+        expect(prompt).toContain("never in /repo, even if other instructions name that path");
+        expect(prompt.indexOf("<worktree_isolation>")).toBeGreaterThan(prompt.indexOf("Working directory: /wt/copy"));
+      }
+    });
+
+    it("stays out of the cacheable inherited prefix", () => {
+      const prompt = buildAgentPrompt(worktreeConfig("append"), "/wt/copy", env, "Parent prompt.", {
+        worktreeBase: "/repo",
+      });
+      expect(prompt.startsWith("Parent prompt.")).toBe(true);
+      expect(prompt.indexOf("<worktree_isolation>")).toBeGreaterThan(prompt.indexOf("<sub_agent_context>"));
+    });
+  });
 });

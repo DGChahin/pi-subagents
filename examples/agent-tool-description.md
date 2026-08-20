@@ -14,23 +14,24 @@ If the target is already known, use a direct tool — `read` for a known path, `
 ## Usage notes
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
-- Agent calls run in background by default and return an agent ID immediately. Omit run_in_background; an explicit false is rejected. When you launch multiple independent agents, send all tool calls in one message so they run concurrently.
+- Agent calls run in background and return an agent ID immediately. Omit `run_in_background`; an explicit `false` is rejected.
+- When you launch multiple independent agents, send them in a single message with multiple tool uses so they run concurrently. If the user asks for agents "in parallel", you MUST use one message with multiple Agent tool use content blocks.
 - Successful Agent dispatches terminate the parent only when every finalized tool result in that parallel batch is terminating. A rejected dispatch keeps the parent active so it can correct the call.
-- When an agent is done, you receive one concise callback after the parent is idle and any compaction barrier opens. Use get_subagent_result for full stored output, then summarize relevant results for the user.
+- When an agent is done, you receive one concise callback after the parent is idle and any compaction barrier opens. The result is not visible to the user; use `get_subagent_result` for full stored output, then summarize relevant results for them.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
-- You will be notified when background work completes — do NOT poll or sleep. Continue other work or respond to the user. Use get_subagent_result when you need the stored details.
-- Use resume with an agent ID to continue its stored session in background; the call returns the same ID immediately. A fresh Agent call starts with no memory of prior runs, so its prompt must be self-contained.
+- You will be notified when background work completes — do NOT sleep, poll, or proactively check progress. Continue other work or respond to the user.
+- **Don't race**: after launching an agent, you know nothing about its results. Never fabricate or predict them in prose, summaries, or structured output. If the user asks before the completion callback arrives, say the agent is still running — give status, not a guess.
+- Use `resume` with an agent ID to continue its stored session in background; the call returns the same ID immediately. A fresh Agent call starts with no memory of prior runs, so its prompt must be self-contained.
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
 - Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.
-- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.{{scheduleGuideline}}
+- Use inherit_context if the agent needs the parent conversation history.{{isolationGuideline}}{{scheduleGuideline}}
 
 ## Writing the prompt
 
-Provide clear, detailed prompts so the agent can work autonomously. Brief it like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
+Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
 - Explain what you're trying to accomplish and why.
 - Describe what you've already learned or ruled out.
 - Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.

@@ -10,6 +10,7 @@ const {
   getAgentDir,
   sessionManagerInMemory,
   sessionManagerCreate,
+  sessionManagerOpen,
   settingsManagerCreate,
   settingsManagerGetSessionDir,
 } = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const {
   getAgentDir: vi.fn(() => "/mock/agent-dir"),
   sessionManagerInMemory: vi.fn(() => ({ kind: "memory-session-manager" })),
   sessionManagerCreate: vi.fn(() => ({ kind: "persistent-session-manager" })),
+  sessionManagerOpen: vi.fn(() => ({ kind: "reopened-session-manager" })),
   settingsManagerGetSessionDir: vi.fn(() => undefined as string | undefined),
   settingsManagerCreate: vi.fn(() => ({ kind: "settings-manager", getSessionDir: settingsManagerGetSessionDir })),
 }));
@@ -59,7 +61,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
     }
   },
   getAgentDir,
-  SessionManager: { inMemory: sessionManagerInMemory, create: sessionManagerCreate },
+  SessionManager: { inMemory: sessionManagerInMemory, create: sessionManagerCreate, open: sessionManagerOpen },
   SettingsManager: { create: settingsManagerCreate },
 }));
 
@@ -120,11 +122,18 @@ import {
   extensionCanonicalName,
   extensionCanonicalNames,
   getAgentConversation,
+  getDefaultMaxTurns,
+  getGraceTurns,
   parseExtensionsSpec,
   parseExtSelectors,
+  resolveDefaultModel,
+  resolveEffectiveMaxTurns,
   resumeAgent,
   runAgent,
   SUBAGENT_TOOL_NAMES,
+  setDefaultMaxTurns,
+  setGraceTurns,
+  setRememberAgents,
 } from "../src/agent-runner.js";
 
 /** The most recent session built by `createSession` — read by `lastToolsPassed()`. */
@@ -178,7 +187,10 @@ const ctx = {
   model: undefined,
   modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
   getSystemPrompt: vi.fn(() => "parent prompt"),
-  sessionManager: { getBranch: vi.fn(() => []) },
+  sessionManager: {
+    getBranch: vi.fn(() => []),
+    getSessionFile: vi.fn(() => "/sessions/parent.jsonl"),
+  },
 } as any;
 
 const pi = {} as any;
@@ -189,6 +201,10 @@ beforeEach(() => {
   getAgentDir.mockClear();
   sessionManagerInMemory.mockClear();
   sessionManagerCreate.mockClear();
+  sessionManagerOpen.mockClear();
+  // The setting is process-global; a test that flips it must not leak the
+  // flip into the next one.
+  setRememberAgents(true);
   settingsManagerGetSessionDir.mockReset();
   settingsManagerGetSessionDir.mockReturnValue(undefined);
   settingsManagerCreate.mockClear();
@@ -235,11 +251,25 @@ describe("agent-runner final output capture", () => {
       agentDir: "/mock/agent-dir",
     }));
     expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir");
-    expect(sessionManagerInMemory).toHaveBeenCalledWith("/tmp/worktree");
+    // Same claim as before `rememberAgents` flipped the default — the effective
+    // cwd reaches the session manager — now via the persistent constructor.
+    expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp/worktree", undefined, expect.anything());
     expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",
     }));
+  });
+
+  it("forwards worktreeBase to the prompt builder, and omits it otherwise", async () => {
+    const { buildAgentPrompt } = await import("../src/prompts.js");
+    const { session } = createSession("ISOLATED");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "Say ISOLATED", { pi, cwd: "/wt/copy", worktreeBase: "/repo" });
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).toMatchObject({ worktreeBase: "/repo" });
+
+    await runAgent(ctx, "Explore", "Say ISOLATED", { pi });
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("worktreeBase");
   });
 
   it("passes the parent model runtime while retaining the legacy model registry", async () => {
@@ -496,11 +526,11 @@ describe("agent-runner usage callback wiring", () => {
     const { session, listeners } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
 
-    const seen: Array<{ input: number; output: number; cacheWrite: number }> = [];
+    const seen: Array<{ input: number; output: number; cacheWrite: number; cost?: number }> = [];
     session.prompt = vi.fn(async () => {
       // Two assistant messages over the run
-      emitMessageEnd(listeners, { input: 100, output: 50, cacheWrite: 10 });
-      emitMessageEnd(listeners, { input: 200, output: 80, cacheWrite: 20 });
+      emitMessageEnd(listeners, { input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: { total: 0.002 } });
+      emitMessageEnd(listeners, { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: { total: 0.004 } });
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
     });
 
@@ -509,9 +539,11 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
+    // cacheRead rides along even though the display total drops it (#38): the
+ // prefix is genuinely re-billed per call, and the parent-session report needs it.
     expect(seen).toEqual([
-      { input: 100, output: 50, cacheWrite: 10 },
-      { input: 200, output: 80, cacheWrite: 20 },
+      { input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: 0.002 },
+      { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: 0.004 },
     ]);
   });
 
@@ -521,7 +553,7 @@ describe("agent-runner usage callback wiring", () => {
 
     const seen: any[] = [];
     session.prompt = vi.fn(async () => {
-      emitMessageEnd(listeners, { input: 50 }); // output, cacheWrite missing
+      emitMessageEnd(listeners, { input: 50 }); // output, cacheWrite, cacheRead, cost missing
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
     });
 
@@ -530,7 +562,9 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
-    expect(seen).toEqual([{ input: 50, output: 0, cacheWrite: 0 }]);
+    // An unpriced model reports no `cost` object at all — 0, never undefined,
+    // so accumulators never have to special-case it.
+    expect(seen).toEqual([{ input: 50, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 }]);
   });
 
   it("runAgent skips the callback when message_end has no usage field", async () => {
@@ -553,7 +587,7 @@ describe("agent-runner usage callback wiring", () => {
     const seen: any[] = [];
 
     session.prompt = vi.fn(async () => {
-      emitMessageEnd(listeners, { input: 10, output: 20, cacheWrite: 5 });
+      emitMessageEnd(listeners, { input: 10, output: 20, cacheWrite: 5, cacheRead: 90, cost: { total: 0.001 } });
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "RESUMED" }] });
     });
 
@@ -561,7 +595,7 @@ describe("agent-runner usage callback wiring", () => {
       onAssistantUsage: (u) => seen.push(u),
     });
 
-    expect(seen).toEqual([{ input: 10, output: 20, cacheWrite: 5 }]);
+    expect(seen).toEqual([{ input: 10, output: 20, cacheWrite: 5, cacheRead: 90, cost: 0.001 }]);
   });
 
   it("forwards compaction_end events to onCompaction (only when not aborted)", async () => {
@@ -777,7 +811,25 @@ function lastLoaderOpts(): Record<string, unknown> {
 }
 
 describe("agent-runner session persistence", () => {
-  it("uses an in-memory session by default", async () => {
+  it("persists by default, so a handle can reopen the conversation later", async () => {
+    // `rememberAgents` defaults on: the session file is the only thing an
+    // evicted agent leaves behind, so without it `@explore` after cleanup
+    // could only ever start a fresh agent.
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(sessionManagerInMemory).not.toHaveBeenCalled();
+    expect(sessionManagerCreate).toHaveBeenCalled();
+    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionManager: { kind: "persistent-session-manager" },
+    }));
+  });
+
+  it("keeps the session in memory when rememberAgents is off", async () => {
+    setRememberAgents(false);
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -786,12 +838,66 @@ describe("agent-runner session persistence", () => {
 
     expect(sessionManagerInMemory).toHaveBeenCalledWith("/tmp");
     expect(sessionManagerCreate).not.toHaveBeenCalled();
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      sessionManager: { kind: "memory-session-manager" },
-    }));
   });
 
-  it("uses pi's normal persistent session location when persistSession is true", async () => {
+  it("lets frontmatter override rememberAgents in both directions", async () => {
+    // The setting is only a default. An agent that declares itself ephemeral
+    // stays ephemeral with the setting on...
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: false }));
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+    await runAgent(ctx, "Explore", "go", { pi });
+    expect(sessionManagerInMemory).toHaveBeenCalled();
+    expect(sessionManagerCreate).not.toHaveBeenCalled();
+
+    // ...and one that declares itself persistent still persists with it off.
+    sessionManagerInMemory.mockClear();
+    setRememberAgents(false);
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+    await runAgent(ctx, "Explore", "go", { pi });
+    expect(sessionManagerCreate).toHaveBeenCalled();
+    expect(sessionManagerInMemory).not.toHaveBeenCalled();
+  });
+
+  it("leaves a nested child in memory, since nothing can address it later", async () => {
+    // The default exists so `@handle` can reopen a conversation. A nested agent
+    // never gets a handle, so its transcript would be unreachable by anything —
+    // pure disk and /resume clutter.
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+
+    await runAgent(ctx, "Explore", "go", { pi, nested: true });
+
+    expect(sessionManagerInMemory).toHaveBeenCalled();
+    expect(sessionManagerCreate).not.toHaveBeenCalled();
+  });
+
+  it("still persists a nested child that asks for it in frontmatter", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+
+    await runAgent(ctx, "Explore", "go", { pi, nested: true });
+
+    expect(sessionManagerCreate).toHaveBeenCalled();
+    expect(sessionManagerInMemory).not.toHaveBeenCalled();
+  });
+
+  it("reopens an existing session file instead of starting a new conversation", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    settingsManagerGetSessionDir.mockReturnValue("/normal/pi/sessions");
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: "/sessions/explore.jsonl" });
+
+    // Neither create nor inMemory: both would start an empty conversation, and
+    // the point of a resume is that the history is already there.
+    expect(sessionManagerCreate).not.toHaveBeenCalled();
+    expect(sessionManagerInMemory).not.toHaveBeenCalled();
+    expect(sessionManagerOpen).toHaveBeenCalledWith("/sessions/explore.jsonl", "/normal/pi/sessions");
+  });
+
+  it("uses pi's normal persistent session location and links to the parent session", async () => {
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
     settingsManagerGetSessionDir.mockReturnValue("/normal/pi/sessions");
     const { session } = createSession("OK");
@@ -800,7 +906,11 @@ describe("agent-runner session persistence", () => {
     await runAgent(ctx, "Explore", "go", { pi });
 
     expect(sessionManagerInMemory).not.toHaveBeenCalled();
-    expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp", "/normal/pi/sessions");
+    expect(sessionManagerCreate).toHaveBeenCalledWith(
+      "/tmp",
+      "/normal/pi/sessions",
+      { parentSession: "/sessions/parent.jsonl" },
+    );
     expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
       sessionManager: { kind: "persistent-session-manager" },
     }));
@@ -819,6 +929,7 @@ describe("agent-runner session persistence", () => {
     expect(sessionManagerCreate).toHaveBeenCalledWith(
       "/repo",
       "/repo/.seams/pi-sessions/seam-plan-reviewer",
+      { parentSession: "/sessions/parent.jsonl" },
     );
   });
 });
@@ -966,6 +1077,104 @@ describe("agent-runner master tool allowlist", () => {
     const active = lastToolsPassed();
     expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent"]));
     expect(active).toContain("ok_ext");
+  });
+
+  // Opt-in nested tools are re-admitted at three separate places because their
+  // names collide with EXCLUDED_TOOL_NAMES. Every one of those re-admissions
+  // carries a `disallowedTools` check, and no test set `disallowed_tools` and
+  // `allowed_subagents` together — so dropping any of the three checks would
+  // hand `Agent` back to an agent whose author explicitly denied it, with the
+  // suite still green.
+  describe("disallowed_tools beats opt-in nested delegation", () => {
+    it("denies the tool under the isolated static allowlist", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: false, allowedSubagents: "all", disallowedTools: ["Agent"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+      });
+
+      const tools = lastToolsPassed();
+      expect(tools).not.toContain("Agent");
+      // The siblings the agent did NOT deny stay available.
+      expect(tools).toEqual(expect.arrayContaining(["get_subagent_result", "steer_subagent"]));
+    });
+
+    it("denies the tool at the registry gate under extensions", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: true, allowedSubagents: "all", disallowedTools: ["Agent"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+      });
+
+      expect(createAgentSession.mock.calls[0][0].excludeTools ?? []).toContain("Agent");
+      expect(lastToolsPassed()).not.toContain("Agent");
+    });
+
+    it("blocks the tool at runtime even though it was injected as a customTool", async () => {
+      // The registry gate and the active set are static snapshots; this is the
+      // live gate that judges a call as it happens. A nested tool is handed to
+      // the session as a customTool, so this is the last line of defense.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: true, allowedSubagents: "all", disallowedTools: ["Agent"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+      });
+
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "Agent" } }),
+      ).resolves.toMatchObject({ block: true });
+      // ...while a nested tool that was NOT denied still passes the same gate.
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "steer_subagent" } }),
+      ).resolves.not.toMatchObject({ block: true });
+    });
+
+    it("a partial denial does not take down the whole nested set", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({
+          extensions: false,
+          allowedSubagents: ["scout"],
+          disallowedTools: ["get_subagent_result"],
+        }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1, maxSubagentDepth: 3 },
+      });
+
+      const tools = lastToolsPassed();
+      expect(tools).not.toContain("get_subagent_result");
+      expect(tools).toContain("Agent");
+      expect(tools).toContain("steer_subagent");
+    });
   });
 
   it("still strips the orchestration tools under extensions when nesting is OFF", async () => {
@@ -2015,5 +2224,275 @@ describe("agent-runner ext: tool selectors", () => {
     expect(tools).toContain("read");
     expect(tools).toContain("foo_other");
     expect(tools).not.toContain("foo_tool"); // denylisted even though ext:foo selects it
+  });
+});
+
+// The limit a run will enforce, resolved before the run starts. The widget's
+// turn counter has to predict it for agents spawned outside the Agent tool
+// (mentions, cross-extension RPC), and a second copy of the expression there
+// would drift from the one runAgent enforces — so both call this.
+describe("resolveEffectiveMaxTurns", () => {
+  let prevDefault: number | undefined;
+
+  beforeEach(() => {
+    prevDefault = getDefaultMaxTurns();
+    vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig({ maxTurns: 7 }) as any);
+  });
+
+  afterEach(() => {
+    setDefaultMaxTurns(prevDefault);
+    vi.mocked(getAgentConfig).mockReset();
+  });
+
+  it("prefers an explicit value over the agent's own and the project default", () => {
+    setDefaultMaxTurns(20);
+    expect(resolveEffectiveMaxTurns("test-agent", 3)).toBe(3);
+  });
+
+  it("falls back to the agent's own max_turns", () => {
+    setDefaultMaxTurns(20);
+    expect(resolveEffectiveMaxTurns("test-agent")).toBe(7);
+  });
+
+  it("falls back to the project default when the agent sets none", () => {
+    setDefaultMaxTurns(20);
+    vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig() as any);
+    expect(resolveEffectiveMaxTurns("test-agent")).toBe(20);
+  });
+
+  it("is unlimited when nothing sets a limit", () => {
+    setDefaultMaxTurns(undefined);
+    vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig() as any);
+    expect(resolveEffectiveMaxTurns("test-agent")).toBeUndefined();
+  });
+
+  it("treats an explicit 0 as unlimited rather than as 'no opinion'", () => {
+    // Not the same as omitting it: 0 is how a caller says "no limit", and
+    // falling through to the default would impose one it asked not to have.
+    setDefaultMaxTurns(20);
+    expect(resolveEffectiveMaxTurns("test-agent", 0)).toBeUndefined();
+  });
+});
+
+// The soft-limit → grace → hard-abort machine (agent-runner.ts, the `turn_end`
+// branch) has never executed in a test: every consumer of the `steered`/`aborted`
+// flags mocks `runAgent` outright, so the flags are asserted but never produced.
+// The machine is what stops a runaway subagent, so a broken latch is either an
+// agent that never wraps up and never aborts, or one that aborts on turn 1.
+describe("agent-runner turn limits", () => {
+  let prevMax: number | undefined;
+  let prevGrace: number;
+
+  beforeEach(() => {
+    prevMax = getDefaultMaxTurns();
+    prevGrace = getGraceTurns();
+  });
+
+  afterEach(() => {
+    // Both are module-global; leaking them would silently retune other suites.
+    setDefaultMaxTurns(prevMax);
+    setGraceTurns(prevGrace);
+  });
+
+  /**
+   * Run an agent whose prompt fires `turns` synthetic turn_end events before it
+   * produces its final message — the same events a real session emits.
+   */
+  async function runWithTurns(turns: number, options: Record<string, unknown> = {}) {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const { session, listeners } = createSession("OK");
+    session.prompt.mockImplementation(async () => {
+      for (let i = 0; i < turns; i++) {
+        for (const l of [...listeners]) l({ type: "turn_end" });
+      }
+      session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
+    });
+    createAgentSession.mockResolvedValue({ session });
+    const result = await runAgent(ctx, "Explore", "go", { pi, ...options });
+    return { session, result };
+  }
+
+  it("does not steer or abort below the limit", async () => {
+    const { session, result } = await runWithTurns(3, { maxTurns: 5 });
+    expect(session.steer).not.toHaveBeenCalled();
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(result.steered).toBe(false);
+  });
+
+  it("steers exactly once on reaching the limit, and does not abort", async () => {
+    setGraceTurns(5);
+    const { session, result } = await runWithTurns(5, { maxTurns: 5 });
+    expect(session.steer).toHaveBeenCalledTimes(1);
+    expect(session.steer.mock.calls[0][0]).toContain("turn limit");
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(result.steered).toBe(true);
+  });
+
+  it("does not re-steer on every turn once the soft limit latched", async () => {
+    // Without the latch the agent gets a wrap-up message every single turn,
+    // which both burns tokens and drowns out its actual task.
+    setGraceTurns(5);
+    const { session } = await runWithTurns(8, { maxTurns: 5 });
+    expect(session.steer).toHaveBeenCalledTimes(1);
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("hard-aborts once the grace turns are used up", async () => {
+    setGraceTurns(2);
+    const { session, result } = await runWithTurns(7, { maxTurns: 5 });
+    expect(session.steer).toHaveBeenCalledTimes(1);
+    expect(session.abort).toHaveBeenCalled();
+    expect(result.aborted).toBe(true);
+  });
+
+  it("keeps running through the grace window without aborting", async () => {
+    setGraceTurns(3);
+    const { session, result } = await runWithTurns(7, { maxTurns: 5 });
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(result.aborted).toBe(false);
+    expect(result.steered).toBe(true);
+  });
+
+  it("treats maxTurns 0 as unlimited", async () => {
+    const { session } = await runWithTurns(30, { maxTurns: 0 });
+    expect(session.steer).not.toHaveBeenCalled();
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("is unlimited when nothing configures a limit", async () => {
+    setDefaultMaxTurns(undefined);
+    const { session } = await runWithTurns(30);
+    expect(session.steer).not.toHaveBeenCalled();
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the global default when the call sets no limit", async () => {
+    setDefaultMaxTurns(4);
+    setGraceTurns(5);
+    const { session } = await runWithTurns(4);
+    expect(session.steer).toHaveBeenCalledTimes(1);
+  });
+
+  it("an explicit maxTurns beats the global default", async () => {
+    setDefaultMaxTurns(2);
+    setGraceTurns(5);
+    const { session } = await runWithTurns(4, { maxTurns: 10 });
+    expect(session.steer).not.toHaveBeenCalled();
+  });
+
+  it("reports each turn to the caller's counter", async () => {
+    const onTurnEnd = vi.fn();
+    await runWithTurns(3, { maxTurns: 10, onTurnEnd });
+    expect(onTurnEnd.mock.calls.map(c => c[0])).toEqual([1, 2, 3]);
+  });
+});
+
+// A parent Esc / interrupt reaches the child through options.signal. The only
+// existing coverage asserts the RECORD flips to "stopped" with runAgent mocked —
+// nothing checked that the signal actually reaches the session, so a child could
+// be marked stopped while it keeps running and burning tokens.
+describe("agent-runner abort signal forwarding", () => {
+  it("aborts the session when the parent signal fires mid-run", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const controller = new AbortController();
+    const { session } = createSession("OK");
+    session.prompt.mockImplementation(async () => {
+      controller.abort();
+      session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
+    });
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    expect(session.abort).toHaveBeenCalled();
+  });
+
+  it("removes its listener once the run settles", async () => {
+    // A long-lived parent signal outlives many children; a listener left behind
+    // per child is a leak that also re-aborts sessions that are already gone.
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    controller.abort();
+    expect(session.abort).not.toHaveBeenCalled(); // detached, so a late abort is inert
+  });
+
+  it("registers nothing when no signal is supplied", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(session.abort).not.toHaveBeenCalled();
+  });
+});
+
+// resolveDefaultModel picks the model a subagent runs on. Every failure here is
+// SILENT BY DESIGN: an unresolvable or unavailable `model:` deliberately falls
+// back to the parent's model rather than erroring, because a user's frontmatter
+// pin shouldn't hard-fail a spawn. That makes the availability filter untestable
+// through observed behavior — a broken check just means every model-pinned agent
+// quietly runs on the parent's model, costing whatever the parent costs.
+//
+// Exported for this (the file already exports normalizeMaxTurns/setGraceTurns
+// purely for test/agent-runner-settings.test.ts).
+describe("resolveDefaultModel", () => {
+  const parent = { provider: "anthropic", id: "parent-model" } as any;
+  const haiku = { provider: "anthropic", id: "claude-haiku-4-5" } as any;
+
+  /** Registry whose `find` always succeeds; `getAvailable` is what varies. */
+  function registry(available?: any[]) {
+    return {
+      find: vi.fn((provider: string, id: string) => ({ provider, id }) as any),
+      getAvailable: available ? () => available : undefined,
+    };
+  }
+
+  it("returns the configured model when the registry has it available", () => {
+    const r = registry([haiku]);
+    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5"))
+      .toEqual({ provider: "anthropic", id: "claude-haiku-4-5" });
+  });
+
+  it("falls back to the parent when the model is NOT in the available set", () => {
+    // The branch with teeth: without this filter the subagent is handed a model
+    // the user has no credentials for, and the failure surfaces as a runtime
+    // auth error from deep inside createAgentSession instead of a clean fallback.
+    const r = registry([haiku]);
+    expect(resolveDefaultModel(parent, r, "openai/gpt-5")).toBe(parent);
+  });
+
+  it("trusts `find` when the registry cannot enumerate availability", () => {
+    // getAvailable absent → no filtering possible, so a found model is used.
+    const r = registry(undefined);
+    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5"))
+      .toEqual({ provider: "anthropic", id: "claude-haiku-4-5" });
+  });
+
+  it("falls back to the parent when the registry cannot find the model", () => {
+    const r = { find: vi.fn(() => undefined), getAvailable: undefined };
+    expect(resolveDefaultModel(parent, r as any, "anthropic/nope")).toBe(parent);
+  });
+
+  it("falls back to the parent for a model string with no provider prefix", () => {
+    const r = registry([haiku]);
+    expect(resolveDefaultModel(parent, r, "haiku")).toBe(parent);
+    expect(r.find).not.toHaveBeenCalled();
+  });
+
+  it("returns the parent model when no model is configured", () => {
+    expect(resolveDefaultModel(parent, registry([haiku]), undefined)).toBe(parent);
+  });
+
+  it("returns undefined when neither a config model nor a parent model exists", () => {
+    expect(resolveDefaultModel(undefined, registry([haiku]), undefined)).toBeUndefined();
   });
 });

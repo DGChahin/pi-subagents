@@ -116,6 +116,34 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
+  it("round-trips agentMentions modes; drops an unknown one", () => {
+    for (const mode of ["model", "direct", "off"] as const) {
+      saveSettings({ agentMentions: mode }, projectDir);
+      expect(loadSettings(projectDir)).toEqual({ agentMentions: mode });
+    }
+    writeProject({ agentMentions: "on" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // unknown mode dropped
+  });
+
+  it("reads the pre-mode agentMentions booleans as their modes", () => {
+    // The setting shipped as a boolean before `model` existed, so a config
+    // written then — or hand-written from the old README — must keep working.
+    // `true` meant "on", and on is now `model`.
+    writeProject({ agentMentions: true } as any);
+    expect(loadSettings(projectDir)).toEqual({ agentMentions: "model" });
+    writeProject({ agentMentions: false } as any);
+    expect(loadSettings(projectDir)).toEqual({ agentMentions: "off" });
+  });
+
+  it("round-trips rememberAgents (true and false); keeps boolean, drops non-boolean", () => {
+    saveSettings({ rememberAgents: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ rememberAgents: false });
+    saveSettings({ rememberAgents: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ rememberAgents: true });
+    writeProject({ rememberAgents: "on" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
+  });
+
   it("round-trips widgetMode; keeps valid values, drops invalid", () => {
     saveSettings({ widgetMode: "off" }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ widgetMode: "off" });
@@ -132,6 +160,46 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({ outputTranscript: true });
     writeProject({ outputTranscript: "no" } as any);
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
+  });
+
+  it("round-trips the compatibility backgroundByDefault field", () => {
+    // Raw load/save keeps upstream files readable. Runtime events and settings
+    // lifecycle writes canonicalize either spelling to this fork's `true`.
+    saveSettings({ backgroundByDefault: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ backgroundByDefault: false });
+
+    saveSettings({ backgroundByDefault: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ backgroundByDefault: true });
+
+    saveSettings({}, projectDir);
+    expect(loadSettings(projectDir)).toEqual({});
+  });
+
+  it("sanitize drops non-boolean backgroundByDefault silently", () => {
+    writeProject({ backgroundByDefault: "yes" } as any);
+    expect(loadSettings(projectDir)).toEqual({});
+    writeProject({ backgroundByDefault: 0 } as any);
+    expect(loadSettings(projectDir)).toEqual({});
+  });
+
+  it("round-trips worktreeIsolation; drops non-boolean", () => {
+    saveSettings({ worktreeIsolation: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ worktreeIsolation: false });
+    saveSettings({ worktreeIsolation: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ worktreeIsolation: true });
+    writeProject({ worktreeIsolation: "off" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
+  });
+
+  it("round-trips reportUsage and showCost; drops non-boolean", () => {
+    saveSettings({ reportUsage: true, showCost: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ reportUsage: true, showCost: true });
+    saveSettings({ reportUsage: false, showCost: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ reportUsage: false, showCost: false });
+    // The sanitizer is an allowlist: a key it does not name is dropped, and the
+    // setting silently never applies.
+    writeProject({ reportUsage: "on", showCost: 1 } as any);
+    expect(loadSettings(projectDir)).toEqual({});
   });
 
   it("sanitize drops non-boolean schedulingEnabled silently", async () => {
@@ -275,6 +343,20 @@ describe("settings persistence", () => {
       expect(loadSettings(projectDir)).toEqual({ scopeModels: false });
     });
 
+    it("accepts strictAgentFiles boolean (true and false)", () => {
+      writeProject({ strictAgentFiles: true });
+      expect(loadSettings(projectDir)).toEqual({ strictAgentFiles: true });
+      writeProject({ strictAgentFiles: false });
+      expect(loadSettings(projectDir)).toEqual({ strictAgentFiles: false });
+    });
+
+    it("drops non-boolean strictAgentFiles", () => {
+      writeProject({ strictAgentFiles: "yes" });
+      expect(loadSettings(projectDir).strictAgentFiles).toBeUndefined();
+      writeProject({ strictAgentFiles: 1 });
+      expect(loadSettings(projectDir).strictAgentFiles).toBeUndefined();
+    });
+
     it("drops non-boolean scopeModels", () => {
       writeProject({ scopeModels: "yes" });
       expect(loadSettings(projectDir).scopeModels).toBeUndefined();
@@ -411,20 +493,39 @@ describe("settings persistence", () => {
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
+        setBackgroundByDefault: vi.fn(),
         setSchedulingEnabled: vi.fn(),
         setScopeModels: vi.fn(),
+        setStrictAgentFiles: vi.fn(),
         setDisableDefaultAgents: vi.fn(),
         setToolDescriptionMode: vi.fn(),
         setFleetView: vi.fn(),
+        setAgentMentions: vi.fn(),
+        setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
+        setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
+        setReportUsage: vi.fn(),
+        setShowCost: vi.fn(),
       };
+    });
+
+    it("applies reportUsage and showCost", () => {
+      applySettings({ reportUsage: true, showCost: true }, appliers);
+      expect(appliers.setReportUsage).toHaveBeenCalledWith(true);
+      expect(appliers.setShowCost).toHaveBeenCalledWith(true);
+
+      applySettings({ reportUsage: false, showCost: false }, appliers);
+      expect(appliers.setReportUsage).toHaveBeenCalledWith(false);
+      expect(appliers.setShowCost).toHaveBeenCalledWith(false);
     });
 
     it("is a no-op on an empty settings object", () => {
       applySettings({}, appliers);
+      expect(appliers.setReportUsage).not.toHaveBeenCalled();
+      expect(appliers.setShowCost).not.toHaveBeenCalled();
       expect(appliers.setMaxConcurrent).not.toHaveBeenCalled();
       expect(appliers.setDefaultMaxTurns).not.toHaveBeenCalled();
       expect(appliers.setGraceTurns).not.toHaveBeenCalled();
@@ -475,10 +576,18 @@ describe("settings persistence", () => {
       expect(appliers.setDefaultJoinMode).toHaveBeenCalledWith("group");
       expect(appliers.setSchedulingEnabled).toHaveBeenCalledWith(false);
       expect(appliers.setScopeModels).toHaveBeenCalledWith(true);
+      expect(appliers.setStrictAgentFiles).not.toHaveBeenCalled(); // absent from this snapshot
       expect(appliers.setDisableDefaultAgents).toHaveBeenCalledWith(true);
       expect(appliers.setToolDescriptionMode).toHaveBeenCalledWith("compact");
       expect(appliers.setFleetView).toHaveBeenCalledWith(false);
       expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
+    });
+
+    it("applies strictAgentFiles; skips it when absent", () => {
+      applySettings({ strictAgentFiles: true }, appliers);
+      expect(appliers.setStrictAgentFiles).toHaveBeenCalledWith(true);
+      applySettings({}, appliers);
+      expect(appliers.setStrictAgentFiles).toHaveBeenCalledTimes(1);
     });
 
     it("applies widgetMode; skips it when absent", () => {
@@ -493,6 +602,20 @@ describe("settings persistence", () => {
       expect(appliers.setFleetView).toHaveBeenCalledWith(true);
       applySettings({}, appliers);
       expect(appliers.setFleetView).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies agentMentions; skips it when absent", () => {
+      applySettings({ agentMentions: "direct" }, appliers);
+      expect(appliers.setAgentMentions).toHaveBeenCalledWith("direct");
+      applySettings({}, appliers);
+      expect(appliers.setAgentMentions).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies rememberAgents; skips it when absent", () => {
+      applySettings({ rememberAgents: false }, appliers);
+      expect(appliers.setRememberAgents).toHaveBeenCalledWith(false);
+      applySettings({}, appliers);
+      expect(appliers.setRememberAgents).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies scopeModels: false", () => {
@@ -517,9 +640,30 @@ describe("settings persistence", () => {
       expect(appliers.setOutputTranscript).toHaveBeenCalledWith(true);
     });
 
+    it("applies worktreeIsolation (both true and false)", () => {
+      applySettings({ worktreeIsolation: false }, appliers);
+      expect(appliers.setWorktreeIsolation).toHaveBeenCalledWith(false);
+      applySettings({ worktreeIsolation: true }, appliers);
+      expect(appliers.setWorktreeIsolation).toHaveBeenCalledWith(true);
+    });
+
     it("applies defaultMaxTurns: 0 as the explicit unlimited marker", () => {
       applySettings({ defaultMaxTurns: 0 }, appliers);
       expect(appliers.setDefaultMaxTurns).toHaveBeenCalledWith(0);
+    });
+
+    it("calls setBackgroundByDefault with either boolean", () => {
+      applySettings({ backgroundByDefault: false }, appliers);
+      expect(appliers.setBackgroundByDefault).toHaveBeenCalledWith(false);
+      applySettings({ backgroundByDefault: true }, appliers);
+      expect(appliers.setBackgroundByDefault).toHaveBeenCalledWith(true);
+    });
+
+    // Absence leaves the compatibility sink untouched; the runtime remains
+    // background-only either way.
+    it("does not call setBackgroundByDefault when the field is absent", () => {
+      applySettings({ maxConcurrent: 4 }, appliers);
+      expect(appliers.setBackgroundByDefault).not.toHaveBeenCalled();
     });
 
     // Wiring tests for the master switch — ensures the schedulingEnabled
@@ -569,15 +713,22 @@ describe("settings persistence", () => {
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
+        setBackgroundByDefault: vi.fn(),
         setSchedulingEnabled: vi.fn(),
         setScopeModels: vi.fn(),
+        setStrictAgentFiles: vi.fn(),
         setDisableDefaultAgents: vi.fn(),
         setToolDescriptionMode: vi.fn(),
         setFleetView: vi.fn(),
+        setAgentMentions: vi.fn(),
+        setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
+        setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
+        setReportUsage: vi.fn(),
+        setShowCost: vi.fn(),
       };
     });
 
@@ -595,18 +746,19 @@ describe("settings persistence", () => {
 
       expect(emit).toHaveBeenCalledTimes(1);
       expect(emit).toHaveBeenCalledWith("subagents:settings_loaded", {
-        settings: { maxConcurrent: 16, graceTurns: 7 },
+        settings: { maxConcurrent: 16, graceTurns: 7, backgroundByDefault: true },
       });
-      expect(result).toEqual({ maxConcurrent: 16, graceTurns: 7 });
+      expect(result).toEqual({ maxConcurrent: 16, graceTurns: 7, backgroundByDefault: true });
     });
 
-    it("still emits the event when both files are missing (payload carries {})", () => {
+    it("still emits the canonical background-only setting when both files are missing", () => {
       const emit = vi.fn();
 
       const result = applyAndEmitLoaded(appliers, emit, projectDir);
 
-      expect(emit).toHaveBeenCalledWith("subagents:settings_loaded", { settings: {} });
-      expect(result).toEqual({});
+      const settings = { backgroundByDefault: true };
+      expect(emit).toHaveBeenCalledWith("subagents:settings_loaded", { settings });
+      expect(result).toEqual(settings);
       // No setters fired — defaults preserved
       expect(appliers.setMaxConcurrent).not.toHaveBeenCalled();
       expect(appliers.setDefaultMaxTurns).not.toHaveBeenCalled();
@@ -623,13 +775,14 @@ describe("settings persistence", () => {
       const toast = saveAndEmitChanged(snapshot, "Max concurrency set to 5", emit, projectDir);
 
       expect(emit).toHaveBeenCalledTimes(1);
+      const settings = { ...snapshot, backgroundByDefault: true };
       expect(emit).toHaveBeenCalledWith("subagents:settings_changed", {
-        settings: snapshot,
+        settings,
         persisted: true,
       });
       expect(toast).toEqual({ message: "Max concurrency set to 5", level: "info" });
-      // File actually written
-      expect(JSON.parse(readFileSync(projectFile(), "utf-8"))).toEqual(snapshot);
+      // The persisted lifecycle snapshot is canonical too.
+      expect(JSON.parse(readFileSync(projectFile(), "utf-8"))).toEqual(settings);
     });
 
     it("emits with persisted=false and returns warning toast on save failure", () => {
@@ -644,7 +797,7 @@ describe("settings persistence", () => {
           filePosingAsCwd,
         );
         expect(emit).toHaveBeenCalledWith("subagents:settings_changed", {
-          settings: { maxConcurrent: 5 },
+          settings: { maxConcurrent: 5, backgroundByDefault: true },
           persisted: false,
         });
         expect(toast).toEqual({

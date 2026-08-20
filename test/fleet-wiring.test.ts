@@ -47,6 +47,7 @@ function uiCtx() {
     setWidget: vi.fn(),
     notify: vi.fn(),
     onTerminalInput: vi.fn(() => vi.fn()),
+    addAutocompleteProvider: vi.fn(),
     getEditorText: vi.fn(() => ""),
     custom: vi.fn(),
     getToolsExpanded: vi.fn(() => true),

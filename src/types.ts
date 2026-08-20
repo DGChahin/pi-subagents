@@ -18,13 +18,26 @@ export const DEFAULT_AGENT_NAMES = ["general-purpose", "Explore", "Plan"] as con
 /** Memory scope for persistent agent memory. */
 export type MemoryScope = "user" | "project" | "local";
 
-/** Isolation mode for agent execution. */
-export type IsolationMode = "worktree";
+/**
+ * Isolation mode for agent execution.
+ *
+ * `"off"` exists for the caller's benefit, not the runtime's: models that fill
+ * every optional parameter had no legal way to decline a single-value
+ * `isolation` field and kept spawning worktrees they had just reasoned their
+ * way out of (#231, #184). It is an input spelling only —
+ * `resolveAgentInvocationConfig` collapses it to `undefined`, so nothing
+ * downstream sees a value other than `"worktree"`. In an agent file it is a
+ * genuine veto, since agent config outranks tool-call params.
+ */
+export type IsolationMode = "worktree" | "off";
 
 /** Unified agent configuration — used for both default and user-defined agents. */
 export interface AgentConfig {
   name: string;
+  /** UI name. `display_name` wins; Claude Code's `name` is accepted as a fallback. */
   displayName?: string;
+  /** Claude Code-compatible name color (named color or #RRGGBB). */
+  color?: string;
   description: string;
   builtinToolNames?: string[];
   /** Raw `ext:` selector entries from the `tools:` CSV, e.g. ["ext:foo", "ext:bar/x"].
@@ -63,7 +76,10 @@ export interface AgentConfig {
   isolated?: boolean;
   /** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
   memory?: MemoryScope;
-  /** Isolation mode — "worktree" runs the agent in a temporary git worktree */
+  /**
+   * Isolation mode — "worktree" runs the agent in a temporary git worktree,
+   * "off" refuses one even when the caller asks (frontmatter outranks params).
+   */
   isolation?: IsolationMode;
   /** true = this is an embedded default agent (informational) */
   isDefault?: boolean;
@@ -71,22 +87,75 @@ export interface AgentConfig {
   enabled?: boolean;
   /** Where this agent was loaded from */
   source?: "default" | "project" | "global";
+  /** Path of the .md it was loaded from. Unset for embedded defaults. */
+  sourcePath?: string;
 }
 
 export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
  * Display mode for the persistent above-editor agent widget.
- * - `all`: show every agent (foreground + background).
- * - `background`: hide foreground agents (they already render inline as the
- *   Agent tool result, #118); show background/queued/scheduled/RPC.
+ * - `all`: show every agent, including internal foreground manager runs.
+ * - `background`: hide those internal foreground runs (they already render
+ *   inline, #118); show all external top-level Agent/RPC/scheduled runs.
  * - `off`: hide the widget entirely.
  */
 export type WidgetMode = 'all' | 'background' | 'off';
 
+/**
+ * How `@handle message` starts an agent that is not already running.
+ * - `model`: inject Claude Code's `agent_mention` reminder and let the main
+ *   model spawn it with the `Agent` tool, which is what Claude Code does.
+ * - `direct`: spawn it here, immediately, with the typed message as its prompt
+ *   and no main-model turn spent.
+ * - `off`: `@` means only "attach a file" again.
+ *
+ * Messaging a running agent and resuming a finished one are direct in every
+ * mode — Claude Code only differs from us on the *new* invocation.
+ */
+export type AgentMentionMode = 'model' | 'direct' | 'off';
+
+/**
+ * What survives a record's eviction so `@handle` keeps working. The live record
+ * is discarded after ~10 minutes, but the pi session it wrote is still on disk,
+ * and this is the little that is needed to find and describe it again.
+ */
+export interface AgentTombstone {
+  handle: string;
+  alias?: string;
+  id: string;
+  type: SubagentType;
+  description: string;
+  /** Always set — a record with no session file is never tombstoned. */
+  sessionFile: string;
+  completedAt: number;
+}
+
+/**
+ * What `@handle` resolved to: an agent still in memory, or the remains of one
+ * whose conversation can be reopened from disk.
+ */
+export type MentionResolution =
+  | { kind: "live"; record: AgentRecord }
+  | { kind: "tombstone"; entry: AgentTombstone };
+
 export interface AgentRecord {
   id: string;
   type: SubagentType;
+  /**
+   * Typeable name for the `@handle message` prompt mention, derived from the
+   * agent type and numbered when siblings collide (`explore`, `explore-2`).
+   * Top-level agents only — nested children are hidden from every top-level
+   * surface, so nothing can address them.
+   */
+  handle?: string;
+  /**
+   * A second, memorable handle from the spawner's `name` (`@auth-audit`), drawn
+   * from the same namespace as `handle` so the two can never collide. Purely
+   * additive: `handle` is assigned regardless, so a named agent stays reachable
+   * by its type and `@explore` never comes to mean "start another one".
+   */
+  alias?: string;
   description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   result?: string;
@@ -131,6 +200,13 @@ export interface AgentRecord {
   outputCwd?: string;
   /** Resume revision whose prompt was written before session streaming starts. */
   outputPromptRevision?: number;
+  /**
+   * The agent's pi session file, when it was persisted (`persist_session`, or
+   * the `rememberAgents` default). Captured so a mention can reopen the
+   * conversation after the record itself has been evicted; undefined for an
+   * in-memory session, which leaves nothing to reopen.
+   */
+  sessionFile?: string;
   /** Cleanup function for the output file stream subscription. */
   outputCleanup?: () => void;
   /** Revision that owns the output stream subscription. */
@@ -145,13 +221,11 @@ export interface AgentRecord {
   compactionCount: number;
   /**
    * Whether this agent was spawned to run in the background. Tri-state, set at
-   * spawn from `SpawnOptions.isBackground`: `true` = background, `false` =
-   * foreground (has an inline Agent tool-result surface), `undefined` = the
-   * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
-   * and has no inline surface). The widget's background-only filter keys off this
-   * — and excludes only explicit `false`, so `undefined` agents stay visible.
-   * Reliable across ALL spawn paths, unlike the UI-only `invocation` snapshot,
-   * which only the Agent-tool path populates.
+   * spawn from `SpawnOptions.isBackground`: `true` = background, `false` = an
+   * internal foreground run with an inline result, `undefined` = a legacy direct
+   * manager caller omitted the field. Externally reachable top-level Agent,
+   * registry, RPC, mention, and scheduler paths all set/canonicalize this to true.
+   * The widget excludes only explicit false in background mode.
    */
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
@@ -197,6 +271,12 @@ export interface NotificationDetails {
   turnCount: number;
   maxTurns?: number;
   totalTokens: number;
+  /**
+   * Estimated cost in USD, from pi's per-message `usage.cost.total`. Always
+   * populated (0 when the model has no pricing); the renderer decides whether
+   * to show it, per the `showCost` setting.
+   */
+  totalCost?: number;
   durationMs: number;
   outputFile?: string;
   error?: string;

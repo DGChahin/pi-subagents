@@ -209,6 +209,7 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     // is deleted or disabled — the opposite of what strict dispatch is for.
     const { tools } = boot();
     vi.mocked(runAgent).mockResolvedValue({
+      // Background resume reads the transcript and subscribes to future updates.
       responseText: "first",
       session: { messages: [], subscribe: vi.fn(() => vi.fn()), dispose: vi.fn() } as any,
       aborted: false,

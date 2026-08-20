@@ -13,7 +13,8 @@
  *
  * Deliberately faux, not live: `PI_E2E_LIVE=1` cannot drive a three-level chain
  * deterministically, and a live model choosing not to delegate would look like
- * a passing test.
+ * a passing test. Each run therefore pins `live: false` rather than trusting the
+ * env var to leave it alone — the pre-publish smoke sets it globally.
  */
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import { loadCustomAgents } from "../src/custom-agents.js";
 import { encodeCwd } from "../src/output-file.js";
 import {
   agentCall,
+  completionTaskIds,
   type FauxReply,
   type PrintModeRun,
   runPrintMode,
@@ -132,20 +134,14 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
         });
       }
 
-      // Top-level parent.
+      // Top-level parent: dispatch in background, wait for the production
+      // completion callback, then fetch the orchestrator's stored result.
       toolsSeen.set("parent", names);
-      const spawned = context.messages.some(
-        (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
-      );
-      if (spawned) {
-        const result = [...context.messages]
-          .reverse()
-          .find((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent");
-        const inner = ((result?.content ?? []) as Array<{ text?: string }>)
-          .map((b) => b.text ?? "")
-          .join("");
-        return `parent saw: ${inner}`;
-      }
+      const results = toolResultTexts(context);
+      const fetched = results.find((result) => result.name === "get_subagent_result")?.text;
+      if (fetched !== undefined) return `parent saw: ${fetched}`;
+      const taskId = completionTaskIds(context).at(-1);
+      if (taskId) return fauxToolCall("get_subagent_result", { agent_id: taskId });
       return agentCall({
         subagent_type: "orchestrator",
         description: "delegate",
@@ -157,6 +153,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       prompt: "Delegate the work.",
       cwd,
       respond,
+      live: false,
       beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
     });
 
@@ -207,7 +204,11 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
         });
       }
 
-      if (toolResultTexts(context).some((r) => r.name === "Agent")) return "parent done";
+      const parentResults = toolResultTexts(context);
+      const fetched = parentResults.find((result) => result.name === "get_subagent_result")?.text;
+      if (fetched !== undefined) return "parent done";
+      const taskId = completionTaskIds(context).at(-1);
+      if (taskId) return fauxToolCall("get_subagent_result", { agent_id: taskId });
       return agentCall({
         subagent_type: "orchestrator",
         description: "delegate",
@@ -220,14 +221,21 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
         prompt: "Delegate the work.",
         cwd,
         respond,
+        live: false,
         beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
       });
 
       // The background child ran and its output came back through the id the
       // spawn handed out — so it was never queued behind its waiting parent.
       const orchestratorResult = run.parentSession.messages
-        .filter((m) => m.role === "toolResult")
-        .flatMap((m) => (m.content as Array<{ text?: string }>).map((b) => b.text ?? ""))
+        .filter(
+          (message) =>
+            message.role === "toolResult" &&
+            (message as { toolName?: string }).toolName === "get_subagent_result",
+        )
+        .flatMap((message) =>
+          (message.content as Array<{ text?: string }>).map((block) => block.text ?? ""),
+        )
         .join("\n");
       expect(orchestratorResult).toContain("orchestrator polled");
       expect(orchestratorResult).toContain(WORKER_MARKER);

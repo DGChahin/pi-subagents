@@ -8,7 +8,7 @@ import { describeActivity, getDisplayName, type Theme, type UICtx } from "./agen
 export const ACTIVITY_ENTRY = "subagents:activity";
 export const ACTIVITY_FINAL_ENTRY = "subagents:activity-final";
 
-export type ActivityCardStatus = "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
+export type ActivityCardStatus = "queued" | "running" | "detached" | "completed" | "steered" | "aborted" | "stopped" | "error";
 /** Minimal record shape shared by subagents and the main context agent. */
 export interface ActivityCardRecord {
   id: string;
@@ -285,6 +285,7 @@ function activityText(state: ActivityCardState): string {
 function statusIcon(state: ActivityCardState, theme: Theme): string {
   if (state.status === "running" || state.status === "queued") return theme.fg("accent", "●");
   if (state.status === "completed" || state.status === "steered") return theme.fg("success", "✓");
+  if (state.status === "detached") return theme.fg("dim", "○");
   return theme.fg("error", "✗");
 }
 
@@ -292,6 +293,7 @@ function statusLabel(state: ActivityCardState, theme: Theme): string {
   switch (state.status) {
     case "queued": return theme.fg("muted", "queued");
     case "running": return theme.fg("accent", "running");
+    case "detached": return theme.fg("dim", "detached");
     case "steered": return theme.fg("warning", "wrapped up");
     case "completed": return theme.fg("success", "completed");
     case "stopped": return theme.fg("dim", "stopped");

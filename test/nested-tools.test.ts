@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
-import { createNestedSubagentTools, type NestedAgentManager } from "../src/nested-tools.js";
+import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
 import { encodeCwd } from "../src/output-file.js";
 
 let cwd: string;
@@ -512,5 +512,32 @@ describe("child-safe nested Agent tools", () => {
     } as any, undefined, undefined, executionCtx);
 
     expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
+  });
+});
+
+// setMaxSubagentDepth clamps its input, but test/settings.test.ts only asserts
+// the applier SPY was called — the real Math.max(0, Math.floor(n)) never runs
+// there. A hand-edited subagents.json reaches this unfiltered, and losing the
+// clamp is silent in the worst direction: a negative depth makes the
+// `depth >= maxSubagentDepth` check true everywhere, disabling nested
+// delegation project-wide with no error.
+describe("setMaxSubagentDepth clamping", () => {
+  let previous: number;
+  beforeEach(() => { previous = getMaxSubagentDepth(); });
+  afterEach(() => { setMaxSubagentDepth(previous); });
+
+  it("floors a negative depth at 0 rather than storing it", () => {
+    setMaxSubagentDepth(-1);
+    expect(getMaxSubagentDepth()).toBe(0);
+  });
+
+  it("truncates a fractional depth toward zero", () => {
+    setMaxSubagentDepth(2.9);
+    expect(getMaxSubagentDepth()).toBe(2);
+  });
+
+  it("stores a valid depth unchanged", () => {
+    setMaxSubagentDepth(3);
+    expect(getMaxSubagentDepth()).toBe(3);
   });
 });

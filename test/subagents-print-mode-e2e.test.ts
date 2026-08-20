@@ -34,6 +34,20 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const LIVE = /^(1|true|yes)$/i.test(process.env.PI_E2E_LIVE ?? "");
 
+function retrievedSubagentResults(session: PrintModeRun["parentSession"]): string[] {
+  return session.messages
+    .filter(
+      (message) =>
+        message.role === "toolResult" &&
+        (message as { toolName?: string }).toolName === "get_subagent_result",
+    )
+    .map((message) =>
+      ((message.content ?? []) as Array<{ type?: string; text?: string }>)
+        .map((block) => block.type === "text" ? (block.text ?? "") : "")
+        .join(""),
+    );
+}
+
 describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", () => {
   let run: PrintModeRun | undefined;
   const tmpDirs: string[] = [];
@@ -58,54 +72,46 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
       }),
     });
 
-    const toolResults = agentToolResults(run.parentSession);
-    expect(toolResults).toHaveLength(1);
-    expect(toolResults[0]).toMatch(/background/i);
-    expect(run.subagents[0]?.result).toBe("CHILD_GREETING_OK");
+    const dispatchResults = agentToolResults(run.parentSession);
+    expect(dispatchResults).toHaveLength(1);
+    expect(dispatchResults[0]).toMatch(/background/i);
+    expect(retrievedSubagentResults(run.parentSession)[0]).toContain("CHILD_GREETING_OK");
     expect(run.responseText).toBe("Parent acknowledged callback.");
-    expect(run.modelCalls).toBeGreaterThanOrEqual(3);
+    expect(run.modelCalls).toBeGreaterThanOrEqual(4);
   });
 
   it("the hold condition is load-bearing: it keeps a BACKGROUND child alive (vs abandoned without it)", async () => {
-    // The child takes a beat to "think" (a real delay in its faux turn). That
-    // delay is what makes the contrast causal and deterministic:
-    //   - WITHOUT the hold, the parent's turn ends and the runner tears down
-    //     before the child ever streams → the child is abandoned (2 model calls:
-    //     parent's tool-call turn + its summary turn; the child never runs).
-    //   - WITH the hold, the parent loop blocks in waitForAll() until the child
-    //     finishes → the child's own model turn actually runs (≥3 calls).
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const respond = async (ctx: Context) => {
-      const isParent = (ctx.tools ?? []).some((t) => t.name === "Agent");
-      if (!isParent) {
-        await sleep(80); // child takes long enough that a non-held parent exits first
+    // The child takes a beat to "think". Without the hold, the background-only
+    // dispatch ends the parent after its tool-call turn. With the hold, the host
+    // stays up for the child, its completion callback, and explicit retrieval.
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const respond = routeBySession({
+      parentInitial: agentCall({
+        description: "bg work",
+        prompt: "Do background work.",
+      }),
+      parentFinal: "summarized",
+      subagent: async () => {
+        await sleep(80);
         return "CHILD_BG_RAN";
-      }
-      const spawned = ctx.messages.some(
-        (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
-      );
-      return spawned
-        ? "summarized"
-        : agentCall({ description: "bg work", prompt: "Do background work.", run_in_background: true });
-    };
+      },
+    });
 
-    // Control: no hold → the child hasn't run by the time the parent turn ends.
-    // `modelCalls` is snapshotted at that moment (it's a plain number on the
-    // result), so draining afterwards to tear down cleanly doesn't change it.
+    // Control: no hold → only the dispatch turn has run at the return boundary.
     const noHold = await runPrintMode({ prompt: "go", hold: false, respond });
     const abandonedCalls = noHold.modelCalls;
-    await noHold.manager?.waitForAll(); // let the orphan finish before dispose (avoids stale-ctx)
+    await noHold.manager?.waitForAll();
     await noHold.dispose();
 
-    // Subject: hold on → child runs to completion before the parent finishes.
+    // Subject: hold on → callback-driven retrieval settles before return.
     run = await runPrintMode({ prompt: "go", hold: true, respond });
 
-    // Background spawn returns its envelope synchronously either way.
     expect(agentToolResults(run.parentSession)[0]).toMatch(/background/i);
-    // The hold is load-bearing: only with it does the child's turn actually run.
-    expect(abandonedCalls).toBe(2); // parent tool-call + summary; child never streamed
+    expect(retrievedSubagentResults(run.parentSession)[0]).toContain("CHILD_BG_RAN");
+    expect(invokedToolNames(run.parentSession)).toContain("get_subagent_result");
+    expect(abandonedCalls).toBe(1);
     expect(run.modelCalls).toBeGreaterThan(abandonedCalls);
-    expect(run.modelCalls).toBeGreaterThanOrEqual(3);
+    expect(run.modelCalls).toBeGreaterThanOrEqual(4);
   });
 
   it("spawns a FRONTMATTER-defined (.pi/agents/*.md) agent and its prompt reaches the child", async () => {
@@ -138,10 +144,9 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
       }),
     });
 
-    expect(run.subagents).toHaveLength(1);
-    expect(run.subagents[0]?.result).toContain(MARKER);
-    expect(run.subagents[0]?.result).not.toContain("MISSING");
-    expect(run.subagents[0]?.type).toBe("echo-spy");
+    const result = retrievedSubagentResults(run.parentSession)[0];
+    expect(result).toContain(MARKER);
+    expect(result).not.toContain("MISSING");
   });
 
   it("spawns a FRONTMATTER-defined (.agents/agents/*.md) agent and its prompt reaches the child", async () => {
@@ -169,10 +174,41 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
       }),
     });
 
-    expect(run.subagents).toHaveLength(1);
-    expect(run.subagents[0]?.result).toContain(MARKER);
-    expect(run.subagents[0]?.result).not.toContain("MISSING");
-    expect(run.subagents[0]?.type).toBe("agents-spy");
+    const result = retrievedSubagentResults(run.parentSession)[0];
+    expect(result).toContain(MARKER);
+    expect(result).not.toContain("MISSING");
+  });
+
+  it("a colored agent's name badge never reaches print-mode text", async () => {
+    // Badges are a TUI concern: print mode renders no tool components, and the text the
+    // model and `pi -p` see is built from plain display names. An escape sequence here
+    // would mean color leaking into transcripts, headless output and the parent prompt.
+    const cwd = mkdtempSync(join(tmpdir(), "subagents-color-"));
+    tmpDirs.push(cwd);
+    mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "agents", "painted.md"),
+      '---\nname: Painted Agent\ncolor: purple\ndescription: "A colored agent."\n---\nBe brief.\n',
+    );
+
+    run = await runPrintMode({
+      prompt: "Delegate to the painted agent.",
+      cwd,
+      respond: routeBySession({
+        parentInitial: agentCall({
+          subagent_type: "painted",
+          description: "paint",
+          prompt: "Report in.",
+        }),
+        parentFinal: "Done.",
+        subagent: "Painted Agent reporting in.",
+      }),
+    });
+
+    const result = retrievedSubagentResults(run.parentSession)[0];
+    expect(result).toContain("Painted Agent reporting in."); // the escape check below is not vacuous
+    expect(result).not.toContain("\u001b");
+    expect(conversationText(run.parentSession)).not.toContain("\u001b");
   });
 
   it("errors clearly when faux mode is given no script", async () => {
@@ -321,8 +357,14 @@ describe.runIf(LIVE)("subagents print-mode e2e (live LLM, opt-in)", () => {
       const transcript = conversationText(run.parentSession);
       expect(transcript).toMatch(/DEFAULT_OK/i);
       expect(transcript).toMatch(/BG_OK/i);
-      // The agent ran the whole script to completion and self-reported.
-      expect(run.responseText).toMatch(/SELF-SMOKE COMPLETE/i);
+      // The agent ran the whole script to completion and self-reported. Checked
+      // against the transcript, not `responseText`: step 2's background agent
+      // completes asynchronously, so its completion nudge can land AFTER the
+      // final report and draw one more turn out of the model ("Acknowledged, all
+      // three steps PASS"). The report is then the second-to-last message and a
+      // last-message assertion fails a run that did everything right.
+      expect(transcript).toMatch(/SELF-SMOKE COMPLETE/i);
+      expect(run.responseText.length).toBeGreaterThan(0);
     },
     SELF_SMOKE_VITEST_TIMEOUT,
   );

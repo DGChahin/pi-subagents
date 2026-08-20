@@ -1,8 +1,9 @@
 import { Editor, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
-import type { AgentRecord } from "../src/types.js";
-import { getDisplayName } from "../src/ui/agent-widget.js";
+import { registerAgents } from "../src/agent-types.js";
+import type { AgentConfig, AgentRecord } from "../src/types.js";
+import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
 import { FleetList, type FleetUICtx, formatFleetElapsed, formatFleetTokens } from "../src/ui/fleet-list.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
@@ -16,6 +17,28 @@ const ENTER = "\r";
 const DOWN_RELEASE = "\x1b[1;1:3B";
 
 const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => `*${s}*` };
+
+/** An agent that renders as a badge — no default agent configures a color. */
+const BADGED_TYPE = "colored-reviewer";
+const PURPLE_BACKGROUND = "\u001b[48;2;130;125;189m";
+const BADGED_CONFIG: AgentConfig = {
+  name: BADGED_TYPE,
+  displayName: "Code Reviewer",
+  color: "purple",
+  description: "Reviews code",
+  extensions: false,
+  skills: false,
+  systemPrompt: "Review code.",
+  promptMode: "replace",
+};
+
+/**
+ * Visible text of a rendered row: ANSI stripped, along with this theme's fake
+ * `<color>` / `*bold*` markers — all three stand in for zero-width escapes.
+ */
+function plain(row: string): string {
+  return row.replace(/\u001b\[[0-9;]*m/g, "").replace(/<\/?[a-zA-Z]+>|\*/g, "");
+}
 
 /** A no-op session so a record is "openable" by default (the list hides session-less agents). */
 const FAKE_SESSION = { subscribe: () => () => {}, messages: [] };
@@ -179,6 +202,52 @@ describe("FleetList navigation", () => {
     h.press(DOWN_RELEASE);
     expect(h.render().find(l => l.includes("one"))).toContain("●");
     expect(h.render().find(l => l.includes("two"))).toContain("○");
+  });
+
+  it("renders the whole selected row in the theme's primary text color (#230)", () => {
+    const h = harness([
+      makeRecord({ id: "a1", description: "one" }),
+      makeRecord({ id: "a2", description: "two" }),
+    ]);
+    h.press(DOWN); // activate → main
+    h.press(DOWN); // → a1
+    const selected = h.render().find(l => l.includes("one"))!;
+    // Selection marker keeps accent color; row content uses primary text color.
+    expect(selected).toContain("<accent>●</accent>");
+    expect(selected).toContain("<text>one</text>");
+    expect(selected).toMatch(/<text>\d+s · ↓ [\d.]+k? tokens<\/text>/);
+    // Agent display name rendered with the text token too (this type has no badge).
+    expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
+    // Inactive rows keep the muted/dim treatment.
+    const unselected = h.render().find(l => l.includes("two"))!;
+    expect(unselected).toContain("<dim>○</dim>");
+    expect(unselected).toMatch(/<dim>\d+s · ↓ [\d.]+k? tokens<\/dim>/);
+    expect(unselected).not.toContain("<text>");
+  });
+
+  it("keeps a color badge on the selected row, bolded, without shifting it (#230)", () => {
+    registerAgents(new Map([[BADGED_TYPE, BADGED_CONFIG]]));
+    try {
+      const h = harness([
+        makeRecord({ id: "a1", type: BADGED_TYPE, description: "one" }),
+        makeRecord({ id: "a2", type: BADGED_TYPE, description: "two" }),
+      ]);
+      h.press(DOWN); // activate → main
+      const before = h.render().find(l => l.includes("one"))!;
+      expect(before).toContain(`${PURPLE_BACKGROUND}`);
+      expect(before).toContain(` ${BADGED_CONFIG.displayName} `);
+
+      h.press(DOWN); // → a1
+      const selected = h.render().find(l => l.includes("one"))!;
+      // Selection bolds the badge rather than repainting it (Claude Code's FleetView) …
+      expect(selected).toContain(PURPLE_BACKGROUND);
+      expect(selected).toContain(`* ${BADGED_CONFIG.displayName} *`);
+      expect(selected).not.toContain(`<text>${BADGED_CONFIG.displayName}`);
+      // … so the description stays in the same column as when unselected.
+      expect(plain(selected).indexOf("one")).toBe(plain(before).indexOf("one"));
+    } finally {
+      registerAgents(new Map());
+    }
   });
 
   it("moves selection down/up and clamps at the ends", () => {
@@ -434,5 +503,51 @@ describe("FleetList overlay lifecycle", () => {
     expect(harness([recent]).render().some(l => l.includes("recent done"))).toBe(true);
     const old = makeRecord({ id: "o", description: "old done", status: "completed", completedAt: Date.now() - 60_000 });
     expect(harness([old]).render().some(l => l.includes("old done"))).toBe(false);
+  });
+});
+
+describe("FleetList cost display", () => {
+  const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
+
+  function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
+    const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
+    const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
+    let factory: any;
+    fleet.setUICtx({
+      setWidget: (_k: string, c: any) => { factory = c; },
+      onTerminalInput: () => () => {},
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise(() => {})) as any,
+    } as any);
+    fleet.update();
+    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
+  }
+
+  it("appends the cost after the token count when enabled", () => {
+    const out = row(true, 0.0042);
+    expect(out).toContain("13.1k tokens");
+    expect(out).toContain("~$0.0042");
+  });
+
+  it("shows no cost when disabled, and none for an unpriced model", () => {
+    expect(row(false, 0.0042)).not.toContain("$");
+    expect(row(true, 0)).not.toContain("$");
+  });
+
+  it("reads the record, so the figures do not change when the agent finishes", () => {
+    // Spend used to come from the live activity tracker while an agent ran and
+    // from its record once the tracker was deleted. The two disagree: only the
+    // record carries a nested child's spend (nested-tools folds it into every
+    // ancestor), so the number jumped upward at completion.
+    // The stale shape on purpose: an activity entry carrying figures of its own
+    // is what the old fallback preferred, so a row that still renders the
+    // record's numbers proves the tracker is no longer consulted for spend.
+    const tracked = new Map<string, AgentActivity>([["a1", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      lifetimeUsage: { input: 1, output: 1, cacheWrite: 0, cost: 0.9 },
+    } as unknown as AgentActivity]]);
+
+    expect(row(true, 0.0042, tracked)).toBe(row(true, 0.0042));
   });
 });

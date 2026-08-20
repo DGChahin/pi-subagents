@@ -27,7 +27,8 @@
  *     parent and the spawned child deterministically — no network, CI-safe. You
  *     supply a `respond(context)` function (or raw `steps`) that emits the
  *     `Agent` tool call on the parent and a reply on the child. `routeBySession`
- *     does the parent/child branching for the common single-spawn case.
+ *     drives the common background dispatch → completion callback →
+ *     `get_subagent_result` flow.
  *   - Live (opt-in): set `PI_E2E_LIVE=1` or pass `live: {provider, model}`. A real
  *     model drives the turn; `respond`/`steps` are ignored. Non-deterministic,
  *     needs creds. With no explicit model pin, it resolves the model from your
@@ -65,6 +66,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { fauxModelBackend } from "./faux-model-backend.js";
 import { getModel, registerFauxProvider } from "./pi-ai.js";
 
 /** Path to the pi-subagents extension entrypoint (repo `src/index.ts`). */
@@ -112,10 +114,16 @@ export interface RunPrintModeOptions {
   /** Faux mode: how many model calls to pad the queue for. Default 16. */
   maxModelCalls?: number;
   /**
-   * Honor the subagent hold condition — block the parent agent loop until
-   * background subagents finish (the pi-chonky-step monkey-patch). Default true.
+   * Honor the subagent hold condition — block the parent host until background
+   * subagents finish and their completion callbacks settle. Default true.
    */
   hold?: boolean;
+  /**
+   * With `hold: false`, wait for this many agent IDs to arrive in real
+   * completion callbacks before returning. Used when another agent must remain
+   * live while the callback under test is processed. Default 0.
+   */
+  waitForCompletionCallbacks?: number;
   /**
    * Run before the parent turn, after globals are isolated — e.g.
    * `registerAgents(loadCustomAgents(cwd))` to install frontmatter agents.
@@ -137,8 +145,15 @@ export interface RunPrintModeOptions {
    * neither this nor `PI_PROVIDER`+`PI_MODEL` is set, the model is left for pi to
    * resolve from your local config (settings default → first authed model) — i.e.
    * it picks up whatever your `pi` install is logged into, no env required.
+   *
+   * `false` pins the run faux even under `PI_E2E_LIVE=1`. A suite whose whole
+   * point is a scripted response — a provider error with no content, a
+   * three-level delegation chain — has nothing to gain from a real model and
+   * cannot assert anything once one answers instead. Without this, running the
+   * documented pre-publish smoke turns those suites red on a healthy tree,
+   * which is worse than not running them: it hides a real regression in noise.
    */
-  live?: { provider: string; model: string };
+  live?: { provider: string; model: string } | false;
 }
 
 export interface PrintModeRun {
@@ -180,37 +195,69 @@ export function agentCall(
   return fauxToolCall("Agent", { subagent_type: "general-purpose", ...args }, opts);
 }
 
-function resolveReply(
-  reply: FauxReply | ((ctx: Context) => FauxReply),
-  ctx: Context,
-): FauxReply {
-  return typeof reply === "function" ? (reply as (c: Context) => FauxReply)(ctx) : reply;
+type FauxRoute = FauxReply | ((ctx: Context) => FauxReply | Promise<FauxReply>);
+
+function resolveReply(reply: FauxRoute, ctx: Context): FauxReply | Promise<FauxReply> {
+  return typeof reply === "function"
+    ? (reply as (context: Context) => FauxReply | Promise<FauxReply>)(ctx)
+    : reply;
+}
+
+/** Agent IDs carried by real background completion callbacks in this context. */
+export function completionTaskIds(context: Context): string[] {
+  return context.messages.flatMap((message) => {
+    const content = (message as { content?: unknown }).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((block: { type?: string; text?: string }) =>
+              block.type === "text" ? (block.text ?? "") : "",
+            )
+            .join("")
+        : "";
+    return [...text.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map((match) => match[1]);
+  });
 }
 
 /**
- * The common single-spawn flow as a responder. Routes by inspecting the calling
- * session's own context:
- *   - PARENT  (its tool set includes `Agent`):
- *       · `parentInitial` until an `Agent` tool result is in history (the spawn),
- *       · then `parentFinal` (the answer after the child reports back).
- *   - SUBAGENT (no `Agent` tool): `subagent`.
- * Each route may be a value or a `(ctx) => value` function.
+ * The common single-spawn flow as a responder. The parent dispatches once,
+ * remains stopped until the production completion callback restarts it, fetches
+ * the stored result by the callback's task ID, and only then emits `parentFinal`.
+ * A subagent without nested orchestration tools takes the `subagent` route.
  */
 export function routeBySession(routes: {
-  parentInitial: FauxReply | ((ctx: Context) => FauxReply);
-  parentFinal?: FauxReply | ((ctx: Context) => FauxReply);
-  subagent: FauxReply | ((ctx: Context) => FauxReply);
+  parentInitial: FauxRoute;
+  parentFinal?: FauxRoute;
+  subagent: FauxRoute;
 }): FauxResponder {
   return (context) => {
-    const isParent = (context.tools ?? []).some((t) => t.name === "Agent");
+    const isParent = (context.tools ?? []).some((tool) => tool.name === "Agent");
     if (!isParent) return resolveReply(routes.subagent, context);
-    const spawned = context.messages.some(
-      (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
+
+    const fetched = context.messages.some(
+      (message) =>
+        message.role === "toolResult" &&
+        (message as { toolName?: string }).toolName === "get_subagent_result",
     );
-    if (spawned) {
+    if (fetched) {
       return routes.parentFinal != null
         ? resolveReply(routes.parentFinal, context)
         : "Done.";
+    }
+
+    const taskId = completionTaskIds(context).at(-1);
+    if (taskId) {
+      return fauxToolCall("get_subagent_result", { agent_id: taskId });
+    }
+
+    const dispatched = context.messages.some(
+      (message) =>
+        message.role === "toolResult" &&
+        (message as { toolName?: string }).toolName === "Agent",
+    );
+    if (dispatched) {
+      throw new Error("Parent resumed before the background completion callback arrived");
     }
     return resolveReply(routes.parentInitial, context);
   };
@@ -235,6 +282,9 @@ const DEFAULT_SYSTEM_PROMPT =
   "You are a headless orchestrator. Use the Agent tool to delegate, then report the result.";
 
 function isLive(options: RunPrintModeOptions): boolean {
+  // An explicit `false` wins over the env var — the env var is a blanket switch,
+  // and a suite that pins itself faux is stating something the switch can't know.
+  if (options.live === false) return false;
   return Boolean(options.live) || /^(1|true|yes)$/i.test(process.env.PI_E2E_LIVE ?? "");
 }
 
@@ -268,13 +318,17 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   let faux: ReturnType<typeof registerFauxProvider> | undefined;
   let model: Model<string> | undefined;
   let modelRegistry: unknown;
+  let modelRuntime: unknown;
   if (live) {
     // Explicit pin wins (options.live or PI_PROVIDER + PI_MODEL). Otherwise leave
     // `model` undefined: createAgentSession then calls findInitialModel() against
     // the real, auth-backed registry + your local settings default — i.e. it
     // picks up whatever your `pi` install is logged into, no env needed.
-    const provider = options.live?.provider ?? process.env.PI_PROVIDER;
-    const modelId = options.live?.model ?? process.env.PI_MODEL;
+    // `live: false` never reaches here (isLive returned false), but narrow it
+    // away rather than asserting: the pin is a plain option, not a type-level fact.
+    const pin = options.live || undefined;
+    const provider = pin?.provider ?? process.env.PI_PROVIDER;
+    const modelId = pin?.model ?? process.env.PI_MODEL;
     if (provider && modelId) {
       // getModel's overloads need the concrete provider literal; cast through.
       // Since pi-ai 0.80 it is a static builtin-catalog lookup that returns
@@ -287,29 +341,19 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
         );
       }
     }
-    modelRegistry = undefined; // let createAgentSession build the real, auth-backed registry
+    // Let createAgentSession build the real, auth-backed registry/runtime.
+    modelRegistry = undefined;
+    modelRuntime = undefined;
   } else {
     if (!options.steps && !options.respond) {
       throw new Error("runPrintMode (faux mode): provide `respond` or `steps`");
     }
     faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
     model = faux.getModel();
-    // Structural faux registry (matches the existing e2e suites): the parent
+    // Structural faux registry + runtime (see faux-model-backend.ts): the parent
     // session uses `model` directly; subagents inherit it via ctx.model since
     // resolveDefaultModel falls back to the parent model when no model is pinned.
-    modelRegistry = {
-      find: () => model,
-      getAll: () => [model],
-      getAvailable: () => [model],
-      hasConfiguredAuth: () => true,
-      isUsingOAuth: () => false,
-      // createAgentSession's injected streamFn checks `auth.ok` and throws
-      // Error(auth.error) otherwise — so the `ok: true` flag is mandatory, not
-      // cosmetic. Without it the turn dies before streaming (empty error message).
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "faux", headers: {} }),
-      registerProvider: () => {},
-      unregisterProvider: () => {},
-    };
+    ({ modelRegistry, modelRuntime } = fauxModelBackend(model));
 
     // Pad the response queue: one context-branching responder per expected model
     // call. The queue is a single FIFO shared by parent + child, but every entry
@@ -352,8 +396,9 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     cwd,
     agentDir,
     model,
-    // Structural faux registry in faux mode; undefined in live mode (defaults).
+    // Structural faux registry/runtime in faux mode; undefined in live mode (defaults).
     modelRegistry: modelRegistry as any,
+    modelRuntime: modelRuntime as any,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(cwd),
     // Live: real settings so an omitted model resolves to your local default
@@ -395,10 +440,19 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     }
   }
 
-  // --- collect the parent's last assistant text ---
+  // --- collect the parent's last assistant text and real completion callbacks ---
   let responseText = "";
+  const callbackAgentIds = new Set<string>();
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type === "message_start") responseText = "";
+    if (event.type === "message_start") {
+      responseText = "";
+      const content = (event.message as { content?: unknown }).content;
+      if (typeof content === "string") {
+        for (const match of content.matchAll(/<task-id>([^<]+)<\/task-id>/g)) {
+          callbackAgentIds.add(match[1]);
+        }
+      }
+    }
     if (
       event.type === "message_update" &&
       event.assistantMessageEvent.type === "text_delta"
@@ -458,16 +512,44 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     await Promise.race([
       (async () => {
         await session.prompt(options.prompt);
-        // Fallback for when the hold patch is unavailable: catch any subagents
-        // still running after prompt() returns and process their results.
+
         if (hold) {
-          while (!failed && manager?.hasRunning()) {
-            await manager.waitForAll();
-            // prompt() resolves (not rejects) on abort, so after a timeout this
-            // orphaned race arm keeps running — never re-prompt a torn-down session.
+          // A successful top-level Agent result terminates the parent turn. Wait
+          // for the production callback to restart it; never synthesize a user
+          // prompt, because that bypasses the callback contract under test.
+          while (!failed) {
+            const dispatchedIds = agentToolResults(session).flatMap((text) => {
+              const id = /Agent ID:\s*([^\s]+)/.exec(text)?.[1];
+              return id ? [id] : [];
+            });
+            if (manager?.hasRunning()) await manager.waitForAll();
+            while (
+              !failed &&
+              dispatchedIds.some((id) => !callbackAgentIds.has(id))
+            ) {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
             if (failed) break;
-            await session.prompt("Background agents have completed. Process their results.");
+            await session.waitForIdle();
+
+            const currentIds = agentToolResults(session).flatMap((text) => {
+              const id = /Agent ID:\s*([^\s]+)/.exec(text)?.[1];
+              return id ? [id] : [];
+            });
+            if (
+              !manager?.hasRunning() &&
+              currentIds.every((id) => callbackAgentIds.has(id)) &&
+              session.isIdle
+            ) {
+              break;
+            }
           }
+        } else {
+          const callbackTarget = options.waitForCompletionCallbacks ?? 0;
+          while (!failed && callbackAgentIds.size < callbackTarget) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          if (!failed && callbackTarget > 0) await session.waitForIdle();
         }
       })(),
       timeout,
