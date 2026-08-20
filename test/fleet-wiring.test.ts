@@ -160,7 +160,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(tools.get("steer_subagent")).toMatchObject({ renderShell: "self" });
     expect(tools.get("Agent").renderCall({}, {} as any).render(80)).toEqual([]);
     expect(tools.get("Agent").renderResult({}, {}, {} as any).render(80)).toEqual([]);
-    for (const name of ["read", "write", "edit"]) {
+    for (const name of ["read", "write", "edit", "bash", "grep", "find", "ls"]) {
       expect(tools.get(name)).toMatchObject({ renderShell: "self" });
       expect(tools.get(name).renderCall({}, {}, {} as any).render(80)).toEqual([]);
       expect(tools.get(name).renderResult({}, {}, {} as any, {} as any).render(80)).toEqual([]);
