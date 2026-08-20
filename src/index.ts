@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
@@ -87,11 +87,15 @@ const hiddenToolRenderers = {
   renderResult: () => new Text("", 0, 0),
 };
 
-function registerHiddenFileToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI): void {
+function registerHiddenBuiltinToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI): void {
   if (ctx.mode !== "tui") return;
   pi.registerTool({ ...createReadToolDefinition(ctx.cwd), ...hiddenToolRenderers });
   pi.registerTool({ ...createWriteToolDefinition(ctx.cwd), ...hiddenToolRenderers });
   pi.registerTool({ ...createEditToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createBashToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createGrepToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createFindToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+  pi.registerTool({ ...createLsToolDefinition(ctx.cwd), ...hiddenToolRenderers });
 }
 
 /** Format an agent's lifetime token total, or "" when zero. */
@@ -1130,7 +1134,7 @@ export default function (pi: ExtensionAPI) {
     mainCardAppended = false;
     mainPromptExpected = false;
     mainSessionActive = true;
-    registerHiddenFileToolRenderers(ctx, pi);
+    registerHiddenBuiltinToolRenderers(ctx, pi);
     suppressMainToolOutput(ctx);
     currentCtx = ctx;
     if (ctx.hasUI) {
