@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-20
+
 > **⚠️ Breaking — an `Agent` call that doesn't say now runs in the background** (`backgroundByDefault`). Following Claude Code, where the agent backgrounds unless the caller passes `run_in_background: false`. An unqualified spawn no longer blocks the turn and no longer returns the agent's output inline: it returns an ID immediately, and the completion notification carries a preview (500 chars solo, 300 grouped) with the full text behind `get_subagent_result`. Set `backgroundByDefault: false` to restore the previous behaviour globally; an explicit `run_in_background` on the call or in frontmatter overrides the setting in both directions. **Nested spawns are unchanged** — an agent spawning its own agent still defaults to foreground, because a detached child is stopped by `abortOwnedChildren` when its parent settles and has no notification path of its own. Two consequences worth planning for: `maxConcurrent` now applies to nearly every spawn where foreground used to bypass it (its default is raised 4 → 10 to compensate), and Esc interrupts the turn without stopping the agents it started — stop those from `/agents → Running agents`, which is also how Claude Code separates the two.
 
 ### Added
