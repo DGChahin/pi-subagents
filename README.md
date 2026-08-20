@@ -12,6 +12,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 4) and smart group join (consolidated notifications)
+- **Unified activity cards** — tool calls and results stay out of the transcript as separate rows, including tools owned by other extensions. Each main-agent or subagent card carries the live tool activity, step count, streamed status, token usage, cost, and outcome between user-facing messages
 - **Live widget UI** — persistent above-editor widget with animated spinners, live tool activity, token counts, and colored status icons. Configurable via `/agents → Settings → Widget`: `all` (every agent), `background` (default — hides foreground runs, which already render inline as the `Agent` tool result), or `off`
 - **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Stop a still-running agent by pressing `x` (then `x` again to confirm) — both work for background agents too
@@ -93,6 +94,14 @@ Restrictions:
 - **Headless `pi -p` doesn't wait for scheduled subagents.**
 
 ## UI
+
+### Activity cards
+
+Each main-agent or subagent run gets one inline activity card. While the run is active, the card updates with the current tool names, completed-tool count, step count, thinking or response status, token usage, cost, duration, and final outcome. Individual tool-call and tool-result rows are hidden from the TUI transcript, including rows for built-in tools and tools registered by unrelated extensions. This is display-only: the owning extension still executes its tool, and Pi keeps the calls and results in model context and session data.
+
+> **Temporary Pi compatibility workaround:** Pi does not currently provide a supported renderer-only override for tools owned by another extension. Until Pi ships that API, pi-subagents temporarily overrides the exported `ToolExecutionComponent.render()` method for active TUI sessions and restores it on session switch or shutdown. This relies on Pi TUI internals and can require adjustment after a Pi upgrade. Another extension that replaces the same method without delegating to the previous renderer can bypass this suppression; extension load order then determines which patch wins. The relevant [Pi issue #8347](https://github.com/earendil-works/pi/issues/8347) and unmerged [Pi PR #8343](https://github.com/earendil-works/pi/pull/8343) were auto-closed by Pi's contribution-policy bot and have not been accepted upstream. The workaround will be removed after Pi releases an equivalent supported API and pi-subagents adopts it.
+
+### Live widget
 
 The extension renders a persistent widget above the editor showing active agents. By default it shows background runs only (`widgetMode: background`) — foreground agents already render inline as the `Agent` tool result, so the widget would otherwise double-render them. Switch to `all` (every agent) or `off` (hide the widget) via `/agents → Settings → Widget`:
 
