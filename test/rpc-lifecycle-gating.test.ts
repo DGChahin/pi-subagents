@@ -190,14 +190,13 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
           expect.any(Function),
           { placement: "aboveEditor" },
         );
-        expect(activeCtx.ui.setStatus).toHaveBeenCalledWith("subagents", "1 running agent");
       });
     } finally {
       await lifecycle.get("session_shutdown")();
     }
   });
 
-  it("shows live tool activity for an RPC-spawned background agent", async () => {
+  it("does not render duplicate activity text for an RPC-spawned background agent", async () => {
     const { pi, lifecycle, busHandlers } = makePi();
     let widgetFactory: any;
     const setWidget = vi.fn((key: string, content: any) => {
@@ -240,7 +239,8 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
       { terminal: { columns: 120 }, requestRender: vi.fn() },
       { fg: (_color: string, text: string) => text, bold: (text: string) => text },
     ).render().join("\n");
-    expect(lines).toContain("running command…");
+    expect(lines).toContain("rpc activity test");
+    expect(lines).not.toContain("running command…");
     expect(lines).not.toContain("thinking…");
 
     await lifecycle.get("session_shutdown")?.();

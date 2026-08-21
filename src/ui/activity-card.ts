@@ -275,10 +275,14 @@ function formatDuration(startedAt: number, completedAt?: number): string {
   return `${(elapsed / 1000).toFixed(1)}s`;
 }
 
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function activityText(state: ActivityCardState): string {
   if (state.activeTools.size > 0) return describeActivity(state.activeTools);
-  if (state.thinkingText.trim()) return `thinking: ${state.thinkingText}`;
-  if (state.responseText.trim()) return state.responseText;
+  if (state.thinkingText.trim()) return `thinking: ${singleLine(state.thinkingText)}`;
+  if (state.responseText.trim()) return singleLine(state.responseText);
   return "thinking…";
 }
 

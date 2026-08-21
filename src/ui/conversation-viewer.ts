@@ -361,8 +361,10 @@ export class ConversationViewer implements Component {
       needsSeparator = true;
     }
 
-    // Streaming indicator for running agents
-    if (this.record.status === "running" && this.activity) {
+    // Show live activity only when there is a concrete tool or response update.
+    // The generic thinking placeholder belongs on the activity card, not here.
+    if (this.record.status === "running" && this.activity
+      && (this.activity.activeTools.size > 0 || this.activity.responseText.trim())) {
       const act = describeActivity(this.activity.activeTools, this.activity.responseText);
       lines.push("");
       lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
