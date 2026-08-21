@@ -48,10 +48,17 @@ describe("activity cards", () => {
       type: "usage",
       usage: { input: 1_200, output: 300, cacheRead: 400, cacheWrite: 200, cost: 0.0123 },
     });
-    store.apply(record, { type: "thinking", fullText: "Reviewing the renderer lifecycle" });
+    store.apply(record, {
+      type: "thinking",
+      fullText: "Reviewing the renderer\nlifecycle across multiple phases",
+    });
 
     const component = createActivityCardComponent(store, toActivityCardData(record), theme);
-    const output = component.render(160).join("\n");
+    const lines = component.render(160);
+    expect(lines).toHaveLength(5);
+    expect(lines.every((line) => !line.includes("\n"))).toBe(true);
+    expect(lines[3]).toContain("⎿  thinking: Reviewing the renderer lifecycle across multiple phases");
+    const output = lines.join("\n");
 
     expect(output).toContain("Agent haiku running");
     expect(output).toContain("steps 2/5");
@@ -60,7 +67,7 @@ describe("activity cards", () => {
     expect(output).toContain("cache 600");
     expect(output).toContain("tools 1");
     expect(output).toContain("≈$0.0123");
-    expect(output).toContain("thinking: Reviewing the renderer lifecycle");
+    expect(output).toContain("thinking: Reviewing the renderer lifecycle across multiple phases");
   });
 
   it("uses a fallback activity when no thinking or response text is available", () => {

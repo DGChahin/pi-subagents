@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { renderRunningAgentStatus } from "../src/index.js";
+import { describe, expect, it, vi } from "vitest";
 import type { WidgetMode } from "../src/types.js";
 import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
@@ -39,18 +38,6 @@ describe("formatSessionTokens", () => {
     expect(fgPreservingNestedStyles(ansiTheme, "accent", tokenText)).toBe(
       "\u001b[35m1.2k token (\u001b[33m70%\u001b[39m\u001b[35m)\u001b[39m",
     );
-  });
-});
-
-describe("renderRunningAgentStatus", () => {
-  it("renders running status as separate component lines", () => {
-    const theme = { fg: (_c: string, s: string) => s };
-    const component = renderRunningAgentStatus("⠋", "thinking: xhigh · 4 tool uses", "thinking…", theme);
-
-    expect(component.render(120).map((line) => line.trimEnd())).toEqual([
-      "⠋ thinking: xhigh · 4 tool uses",
-      "  ⎿  thinking…",
-    ]);
   });
 });
 
@@ -105,6 +92,38 @@ describe("AgentWidget", () => {
     const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };
     expect(renderLines(manager, "foreground")).toContain("foreground description");
     expect(renderLines(manager, "foreground", () => "all")).toContain("foreground description");
+  });
+
+  it("renders one non-activity line per agent without a status bar", () => {
+    const setStatus = vi.fn();
+    const activity = makeActivity();
+    activity.activeTools.set("bash", "run tests");
+    activity.responseText = "response text";
+    activity.thinkingText = "multiline reasoning";
+    const manager = { listAgents: () => [makeRecord("active")] };
+    const widget = new AgentWidget(
+      manager as any,
+      new Map([["active", activity]]),
+      () => "all",
+    );
+    let factory: any;
+    widget.setUICtx({
+      setStatus,
+      setWidget: (_key, content) => { factory = content; },
+    });
+    widget.update();
+
+    const lines = factory(
+      { terminal: { columns: 120 }, requestRender: () => {} },
+      theme,
+    ).render();
+    const output = lines.join("\n");
+    expect(setStatus).not.toHaveBeenCalled();
+    expect(lines).toHaveLength(2);
+    expect(output).toContain("active description");
+    expect(output).not.toContain("thinking");
+    expect(output).not.toContain("running command");
+    expect(output).not.toContain("response text");
   });
 
   it("hides nested children in every coordinator widget mode", () => {

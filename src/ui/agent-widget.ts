@@ -253,9 +253,6 @@ export class AgentWidget {
   private widgetRegistered = false;
   /** Cached TUI reference from widget factory callback, used for requestRender(). */
   private tui: any | undefined;
-  /** Last status bar text, used to avoid redundant setStatus calls. */
-  private lastStatusText: string | undefined;
-
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
@@ -300,7 +297,6 @@ export class AgentWidget {
       this.uiCtx = ctx;
       this.widgetRegistered = false;
       this.tui = undefined;
-      this.lastStatusText = undefined;
     }
   }
 
@@ -416,14 +412,14 @@ export class AgentWidget {
     const frame = SPINNER[this.widgetFrame % SPINNER.length];
 
     // Build sections separately for overflow-aware assembly.
-    // Each running agent = 2 lines (header + activity), finished = 1 line, queued = 1 line.
+    // Each running agent = 1 line, finished = 1 line, queued = 1 line.
 
     const finishedLines: string[] = [];
     for (const a of finished) {
       finishedLines.push(truncate(theme.fg("dim", "├─") + " " + this.renderFinishedLine(a, theme)));
     }
 
-    const runningLines: string[][] = []; // each entry is [header, activity]
+    const runningLines: string[][] = []; // each entry is [header]
     for (const a of running) {
       const modeLabel = getPromptModeLabel(a.type);
       const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
@@ -448,11 +444,8 @@ export class AgentWidget {
       parts.push(elapsed);
       const statsText = parts.join(" · ");
 
-      const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
-
       runningLines.push([
         truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
-        truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }
 
@@ -462,7 +455,7 @@ export class AgentWidget {
 
     // Assemble with overflow cap (heading + overflow indicator = 2 reserved lines).
     const maxBody = MAX_WIDGET_LINES - 1; // heading takes 1 line
-    const totalBody = finishedLines.length + runningLines.length * 2 + (queuedLine ? 1 : 0);
+    const totalBody = finishedLines.length + runningLines.length + (queuedLine ? 1 : 0);
 
     const lines: string[] = [truncate(theme.fg(headingColor, headingIcon) + " " + theme.fg(headingColor, "Agents"))];
 
@@ -472,19 +465,10 @@ export class AgentWidget {
       for (const pair of runningLines) lines.push(...pair);
       if (queuedLine) lines.push(queuedLine);
 
-      // Fix last connector: swap ├─ → └─ and │ → space for activity lines.
+      // Fix the last connector.
       if (lines.length > 1) {
         const last = lines.length - 1;
         lines[last] = lines[last].replace("├─", "└─");
-        // If last item is a running agent activity line, fix indent of that line
-        // and fix the header line above it.
-        if (runningLines.length > 0 && !queuedLine) {
-          // The last two lines are the last running agent's header + activity.
-          if (last >= 2) {
-            lines[last - 1] = lines[last - 1].replace("├─", "└─");
-            lines[last] = lines[last].replace("│  ", "   ");
-          }
-        }
       }
     } else {
       // Overflow — prioritize: running > queued > finished.
@@ -503,11 +487,11 @@ export class AgentWidget {
       const queuedReserve = queuedLine ? 1 : 0;
       budget -= queuedReserve;
 
-      // 1. Running agents (2 lines each)
+      // 1. Running agents (one line each)
       for (const pair of runningLines) {
-        if (budget >= 2) {
+        if (budget >= 1) {
           lines.push(...pair);
-          budget -= 2;
+          budget--;
         } else {
           hiddenRunning++;
         }
@@ -532,7 +516,7 @@ export class AgentWidget {
 
       // Overflow summary
       const overflowParts: string[] = [];
-      if (hiddenRunning > 0) overflowParts.push(`${hiddenRunning} running`);
+      if (hiddenRunning > 0) overflowParts.push(`${hiddenRunning} active`);
       if (hiddenFinished > 0) overflowParts.push(`${hiddenFinished} finished`);
       const overflowText = overflowParts.join(", ");
       lines.push(truncate(theme.fg("dim", "└─") + ` ${theme.fg("dim", `+${hiddenRunning + hiddenFinished} more (${overflowText})`)}`)
@@ -565,30 +549,12 @@ export class AgentWidget {
         this.widgetRegistered = false;
         this.tui = undefined;
       }
-      if (this.lastStatusText !== undefined) {
-        this.uiCtx.setStatus("subagents", undefined);
-        this.lastStatusText = undefined;
-      }
       if (this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; }
       // Clean up stale entries
       for (const [id] of this.finishedTurnAge) {
         if (!allAgents.some(a => a.id === id)) this.finishedTurnAge.delete(id);
       }
       return;
-    }
-
-    // Status bar — only call setStatus when the text actually changes
-    let newStatusText: string | undefined;
-    if (hasActive) {
-      const statusParts: string[] = [];
-      if (runningCount > 0) statusParts.push(`${runningCount} running`);
-      if (queuedCount > 0) statusParts.push(`${queuedCount} queued`);
-      const total = runningCount + queuedCount;
-      newStatusText = `${statusParts.join(", ")} agent${total === 1 ? "" : "s"}`;
-    }
-    if (newStatusText !== this.lastStatusText) {
-      this.uiCtx.setStatus("subagents", newStatusText);
-      this.lastStatusText = newStatusText;
     }
 
     this.widgetFrame++;
@@ -619,12 +585,8 @@ export class AgentWidget {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
     }
-    if (this.uiCtx) {
-      this.uiCtx.setWidget("agents", undefined);
-      this.uiCtx.setStatus("subagents", undefined);
-    }
+    if (this.uiCtx) this.uiCtx.setWidget("agents", undefined);
     this.widgetRegistered = false;
     this.tui = undefined;
-    this.lastStatusText = undefined;
   }
 }

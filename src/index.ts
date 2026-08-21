@@ -61,7 +61,6 @@ import {
   formatTurns,
   getDisplayName,
   getPromptModeLabel,
-  type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
@@ -93,18 +92,6 @@ function registerHiddenFileToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI
   pi.registerTool({ ...createReadToolDefinition(ctx.cwd), ...hiddenToolRenderers });
   pi.registerTool({ ...createWriteToolDefinition(ctx.cwd), ...hiddenToolRenderers });
   pi.registerTool({ ...createEditToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-}
-
-export function renderRunningAgentStatus(
-  frame: string,
-  statsText: string,
-  activity: string,
-  theme: Pick<Theme, "fg">,
-): Container {
-  const container = new Container();
-  container.addChild(new Text(theme.fg("accent", frame) + (statsText ? " " + statsText : ""), 0, 0));
-  container.addChild(new Text(theme.fg("dim", `  ⎿  ${activity}`), 0, 0));
-  return container;
 }
 
 /** Format an agent's lifetime token total, or "" when zero. */
@@ -1027,13 +1014,12 @@ export default function (pi: ExtensionAPI) {
     if (!dispatch.ok) throw new Error(dispatch.message);
     // Every programmatic spawn lands here — cross-extension RPC, both `@handle`
     // mention paths, and the `Symbol.for("pi-subagents:manager")` registry — and
-    // none came through the Agent tool, which is where the UI activity tracker is
-    // otherwise created. Without one the widget and FleetView have no tool name
-    // and no turn count, so the row reads `thinking…` for the agent's whole life
-    // while the header's tool-use count climbs beside it (#181). Double-tracking
-    // is not possible: the Agent tool calls `manager.spawn` directly. The tracker
-    // callbacks are the funnel's own — a caller's are not honoured, since a
-    // half-wired tracker renders worse than none.
+    // none came through the Agent tool, which is where the UI activity tracker was
+    // originally created. The shared tracker keeps FleetView and conversation
+    // viewers current for these paths too (#181). Double-tracking is not possible:
+    // the Agent tool calls `manager.spawn` directly. The tracker callbacks are the
+    // funnel's own — a caller's are not honoured, since a half-wired tracker
+    // renders worse than none.
     //
     // The turn limit is resolved rather than read off `options`, which a mention
     // spawn deliberately omits so the agent's own config can decide: a tracker

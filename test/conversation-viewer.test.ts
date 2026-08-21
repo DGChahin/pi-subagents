@@ -109,6 +109,39 @@ describe("ConversationViewer cost display", () => {
 });
 
 describe("ConversationViewer", () => {
+  it("suppresses generic thinking for empty activity while retaining tool activity", () => {
+    const messages = [{ role: "user", content: "do the thing" }];
+    const emptyActivity = {
+      activeTools: new Map(),
+      toolUses: 0,
+      responseText: "",
+    };
+    const emptyViewer = new ConversationViewer(
+      mockTui(30, 80),
+      mockSession(messages),
+      mockRecord({ status: "running" }),
+      emptyActivity as any,
+      ansiTheme(),
+      vi.fn(),
+    );
+    const emptyOutput = emptyViewer.render(80).join("\n");
+    expect(emptyOutput).not.toContain("thinking…");
+
+    const toolActivity = {
+      ...emptyActivity,
+      activeTools: new Map([["read", "file.ts"]]),
+    };
+    const toolViewer = new ConversationViewer(
+      mockTui(30, 80),
+      mockSession(messages),
+      mockRecord({ status: "running" }),
+      toolActivity as any,
+      ansiTheme(),
+      vi.fn(),
+    );
+    expect(toolViewer.render(80).join("\n")).toContain("reading…");
+  });
+
   describe("render width safety", () => {
     const widths = [40, 80, 120, 216];
 
