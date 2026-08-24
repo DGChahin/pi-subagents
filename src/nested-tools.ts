@@ -291,9 +291,9 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         // and `/agents`, and those all read `lifetimeUsage`. The whole chain is
         // walked, not just the immediate parent — a spawn callback only fires for
         // that child's OWN turns, so stopping at one level would hide a
-        // great-grandchild from the only record anyone can see. (The live
-        // widget/fleet counters read their own per-agent activity tracker, which
-        // still sees only the top-level agent's own turns.)
+        // great-grandchild from the only record anyone can see. Activity cards and
+        // FleetView read the record's lifetime usage, while the per-agent activity
+        // tracker still sees only top-level turns.
         onAssistantUsage: (usage) => {
           for (let id: string | undefined = context.parentAgentId; id !== undefined; ) {
             const ancestor = context.manager.getRecord(id);

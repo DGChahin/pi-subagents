@@ -20,6 +20,7 @@ function makePi() {
   const lifecycle = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
@@ -48,7 +49,15 @@ async function bind(lifecycle: Map<string, any>) {
 function ctx() {
   return {
     hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+    ui: {
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      notify: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
+    },
     cwd: "/tmp",
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },

@@ -2227,7 +2227,7 @@ describe("agent-runner ext: tool selectors", () => {
   });
 });
 
-// The limit a run will enforce, resolved before the run starts. The widget's
+// The limit a run will enforce, resolved before the run starts. The activity card's
 // turn counter has to predict it for agents spawned outside the Agent tool
 // (mentions, cross-extension RPC), and a second copy of the expression there
 // would drift from the one runAgent enforces — so both call this.

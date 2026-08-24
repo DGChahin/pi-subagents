@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
@@ -35,7 +35,8 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type WidgetMode } from "./types.js";
+import { suppressToolExecutionRows } from "./tool-row-suppression.js";
+import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType } from "./types.js";
 import {
   ACTIVITY_ENTRY,
   ACTIVITY_FINAL_ENTRY,
@@ -52,7 +53,6 @@ import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-
 import {
   type AgentActivity,
   type AgentDetails,
-  AgentWidget,
   buildInvocationTags,
   formatCost,
   formatDuration,
@@ -61,6 +61,7 @@ import {
   formatTurns,
   getDisplayName,
   getPromptModeLabel,
+  type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
@@ -87,11 +88,16 @@ const hiddenToolRenderers = {
   renderResult: () => new Text("", 0, 0),
 };
 
-function registerHiddenFileToolRenderers(ctx: ExtensionContext, pi: ExtensionAPI): void {
-  if (ctx.mode !== "tui") return;
-  pi.registerTool({ ...createReadToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-  pi.registerTool({ ...createWriteToolDefinition(ctx.cwd), ...hiddenToolRenderers });
-  pi.registerTool({ ...createEditToolDefinition(ctx.cwd), ...hiddenToolRenderers });
+export function renderRunningAgentStatus(
+  frame: string,
+  statsText: string,
+  activity: string,
+  theme: Pick<Theme, "fg">,
+): Container {
+  const container = new Container();
+  container.addChild(new Text(theme.fg("accent", frame) + (statsText ? " " + statsText : ""), 0, 0));
+  container.addChild(new Text(theme.fg("dim", `  ⎿  ${activity}`), 0, 0));
+  return container;
 }
 
 /** Format an agent's lifetime token total, or "" when zero. */
@@ -273,6 +279,7 @@ export default function (pi: ExtensionAPI) {
 
   const activityCards = new ActivityCardStore();
   const activityTicker = new ActivityCardTicker();
+  let restoreToolExecutionRows: (() => void) | undefined;
   if (typeof pi.registerEntryRenderer === "function") {
     pi.registerEntryRenderer<ActivityCardData>(ACTIVITY_ENTRY, (entry, _options, theme) => {
       const data = entry.data;
@@ -292,32 +299,27 @@ export default function (pi: ExtensionAPI) {
   let mainSessionActive = false;
   let mainPromptExpected = false;
   let mainCardAppended = false;
+  let mainCardWaitingForContinuation = false;
+  const mainCardPendingRuns = new Set<string>();
   let mainCardAppendTimer: ReturnType<typeof setTimeout> | undefined;
   let mainCardAppendGeneration = 0;
   let mainToolsUI: ExtensionContext["ui"] | undefined;
   let mainToolsExpandedBefore: boolean | undefined;
   let mainToolsExpansionSuppressed = false;
 
-  // Older Pi runtimes do not expose this display-only hook; keep the cast optional.
-  const markdownPi = pi as ExtensionAPI & {
-    registerMarkdownTransformer?: (
-      transformer: (
-        markdown: string,
-        context: { messageType: "user" | "assistant" | "assistant-thinking"; isStreaming: boolean },
-      ) => string,
-    ) => void;
-  };
-  markdownPi.registerMarkdownTransformer?.((markdown, { messageType, isStreaming }) => {
+  pi.registerMarkdownTransformer((markdown, { messageType, isStreaming }) => {
     if (messageType === "assistant-thinking") return "";
     if (messageType === "assistant" && isStreaming && mainSessionActive) return "";
     return markdown;
   });
 
   function startMainCard(ctx: ExtensionContext): void {
+    const contextPercent = ctx.getContextUsage()?.percent ?? undefined;
     if (mainCard) {
       mainCard.status = "running";
       mainCard.completedAt = undefined;
       mainCard.error = undefined;
+      mainCard.contextPercent = contextPercent;
       mainOutcome = { status: "running" };
       activityCards.apply(mainCard, { type: "start" });
       return;
@@ -334,12 +336,15 @@ export default function (pi: ExtensionAPI) {
       startedAt: now,
       compactionCount: 0,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      contextPercent,
       invocation: {
         modelName: model ? `${model.provider}/${model.id}` : undefined,
       },
     };
     mainCard = card;
     mainCardAppended = false;
+    mainCardWaitingForContinuation = false;
+    mainCardPendingRuns.clear();
     mainTurnCount = 0;
     mainResponseText = "";
     mainThinkingText = "";
@@ -356,19 +361,23 @@ export default function (pi: ExtensionAPI) {
     mainCardAppendTimer = undefined;
   }
 
-  // Pi exposes no renderer-only override for built-in tools; collapse their rows
-  // for this session and restore the user's setting on switch or shutdown.
+  // Keep Pi's compact tool setting as a fallback if the temporary global row
+  // suppression patch cannot attach, then restore it on switch or shutdown.
   function suppressMainToolOutput(ctx: ExtensionContext): void {
     if (mainToolsExpansionSuppressed) return;
     mainToolsUI = ctx.ui;
-    mainToolsExpandedBefore = ctx.ui.getToolsExpanded?.() ?? true;
-    ctx.ui.setToolsExpanded?.(false);
+    mainToolsExpandedBefore = ctx.ui.getToolsExpanded();
+    ctx.ui.setToolsExpanded(false);
+    ctx.ui.setWorkingVisible(false);
+    ctx.ui.setHiddenThinkingLabel("");
     mainToolsExpansionSuppressed = true;
   }
 
   function restoreMainToolOutput(): void {
     if (!mainToolsExpansionSuppressed) return;
-    mainToolsUI?.setToolsExpanded?.(mainToolsExpandedBefore ?? true);
+    mainToolsUI?.setToolsExpanded(mainToolsExpandedBefore ?? true);
+    mainToolsUI?.setWorkingVisible(true);
+    mainToolsUI?.setHiddenThinkingLabel();
     mainToolsUI = undefined;
     mainToolsExpandedBefore = undefined;
     mainToolsExpansionSuppressed = false;
@@ -396,12 +405,25 @@ export default function (pi: ExtensionAPI) {
     pi.appendEntry<ActivityCardData>(ACTIVITY_FINAL_ENTRY, activityCardSnapshot(mainCard, activityCards));
     mainCard = undefined;
     mainCardAppended = false;
+    mainCardWaitingForContinuation = false;
+    mainCardPendingRuns.clear();
+    restoreMainToolOutput();
   }
 
   function appendMainCard(): void {
     if (!mainCard || mainCardAppended) return;
     mainCardAppended = true;
     pi.appendEntry<ActivityCardData>(ACTIVITY_ENTRY, toActivityCardData(mainCard));
+  }
+
+  function refreshMainCardContext(ctx: ExtensionContext): void {
+    if (!mainCard) return;
+    mainCard.contextPercent = ctx.getContextUsage()?.percent ?? undefined;
+    activityCards.sync(mainCard);
+  }
+
+  function mainCardRunKey(id: string, revision: number): string {
+    return `${id}:${revision}`;
   }
 
   /** Persist active cards before their session generation becomes stale. */
@@ -414,7 +436,7 @@ export default function (pi: ExtensionAPI) {
     const completedAt = Date.now();
     for (const record of manager.listAgents()) {
       if (!cardBelongsToCurrentSession(record)) continue;
-      const state = activityCards.get(record.id);
+      const state = activityCards.getForRecord(record);
       if (!state || (state.status !== "running" && state.status !== "queued")) continue;
       const status: ActivityCardData["status"] =
         detachActive && (record.status === "running" || record.status === "queued")
@@ -509,7 +531,7 @@ export default function (pi: ExtensionAPI) {
   // session on the next unrelated spawn, so every later reload keeps warning.
   reloadCustomAgents(strictAgentFiles);
 
-  // ---- Agent activity tracking + widget ----
+  // ---- Agent activity tracking + aggregate activity cards/FleetView ----
   const agentActivity = new Map<string, AgentActivity>();
 
   // ---- Usage reporting (both off by default; see SubagentsSettings) ----
@@ -526,7 +548,11 @@ export default function (pi: ExtensionAPI) {
   /** Show `~$X` next to token counts in the subagent surfaces. */
   let showCost = false;
   function isShowCostEnabled(): boolean { return showCost; }
-  function setShowCost(b: boolean): void { showCost = b; widget.update(); fleet.update(); }
+  function setShowCost(b: boolean): void {
+    showCost = b;
+    activityCards.setShowCost(b);
+    fleet.update();
+  }
   const pendingUsage = new PendingUsagePool();
 
   // ---- Cancellable pending notifications ----
@@ -614,6 +640,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function discardCompletionDelivery(record: AgentRecord, revision: number): void {
+    mainCardPendingRuns.delete(mainCardRunKey(record.id, revision));
     currentBatchAgents = currentBatchAgents.filter(
       completion => completion.id !== record.id || completion.revision !== revision,
     );
@@ -728,6 +755,7 @@ export default function (pi: ExtensionAPI) {
         details,
       }, { deliverAs: "followUp", triggerTurn: true });
       for (const completion of deliverable) {
+        mainCardPendingRuns.delete(mainCardRunKey(completion.record.id, completion.revision));
         const held = heldCompletions.get(completion.record.id);
         if (held?.revision === completion.revision) heldCompletions.delete(completion.record.id);
         clearMatchingPendingRevision(completion);
@@ -779,10 +807,8 @@ export default function (pi: ExtensionAPI) {
   function sendIndividualNudge(record: AgentRecord, revision: number) {
     const generation = record.parentSessionGeneration ?? sessionGeneration;
     agentActivity.delete(record.id);
-    widget.markFinished(record.id);
     fleet.onAgentFinished(record.id);
     scheduleNudge(record.id, [{ record, revision, partial: false, generation }]);
-    widget.update();
   }
 
   // ---- Group join manager ----
@@ -797,12 +823,10 @@ export default function (pi: ExtensionAPI) {
       const current = completions.filter(isCurrentCompletion);
       for (const { record } of current) {
         agentActivity.delete(record.id);
-        widget.markFinished(record.id);
         fleet.onAgentFinished(record.id);
       }
       const groupKey = `group:${completions.map(({ record, revision }) => `${record.id}:${revision}`).join(",")}`;
       scheduleNudge(groupKey, completions);
-      widget.update();
     },
     30_000,
   );
@@ -855,9 +879,7 @@ export default function (pi: ExtensionAPI) {
     const finishWithoutDelivery = () => {
       clearMatchingPendingRevision({ record, revision: record.runRevision });
       agentActivity.delete(record.id);
-      widget.markFinished(record.id);
       fleet.onAgentFinished(record.id);
-      widget.update();
     };
     const belongsToCurrentParent = () => record.parentSessionGeneration === sessionGeneration;
     if (!belongsToCurrentParent()) {
@@ -902,7 +924,6 @@ export default function (pi: ExtensionAPI) {
     // If this agent is pending batch finalization (debounce window still open),
     // don't send an individual nudge — finalizeBatch will pick it up retroactively.
     if (currentBatchAgents.some(a => a.id === record.id && a.revision === revision)) {
-      widget.update();
       return;
     }
 
@@ -912,7 +933,6 @@ export default function (pi: ExtensionAPI) {
     }
     // 'held' → do nothing, group will fire later
     // 'delivered' → group callback already fired
-    widget.update();
   }
 
   function cardGeneration(record: AgentRecord): number {
@@ -945,8 +965,6 @@ export default function (pi: ExtensionAPI) {
     // Agent-tool spawns refresh these surfaces in their tool handler, but RPC,
     // mention, and scheduler spawns enter through the manager directly.
     if (currentCtx?.hasUI) {
-      widget.ensureTimer();
-      widget.update();
       fleet.ensureTimer();
       fleet.update();
     }
@@ -1028,7 +1046,7 @@ export default function (pi: ExtensionAPI) {
     // leaves the displayed ceiling stale.
     const { state, callbacks } = createActivityTracker(resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns));
     // Repaints are left to the manager's `onStart` callback, which already starts
-    // the widget/fleet timers for agents that enter this way.
+    // the activity-card refresh and FleetView timers for agents that enter this way.
     const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, ...callbacks });
     agentActivity.set(id, state);
     return id;
@@ -1130,11 +1148,11 @@ export default function (pi: ExtensionAPI) {
     mainCardAppended = false;
     mainPromptExpected = false;
     mainSessionActive = true;
-    registerHiddenFileToolRenderers(ctx, pi);
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = ctx.mode === "tui" ? suppressToolExecutionRows() : undefined;
     suppressMainToolOutput(ctx);
     currentCtx = ctx;
     if (ctx.hasUI) {
-      widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
     }
     manager.clearCompleted(true);
@@ -1168,8 +1186,8 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.addAutocompleteProvider(current =>
         createMentionProvider(
           current,
-          // Plain text, not renderAgentName: the same label FleetView and the
-          // widget show, but the autocomplete description cannot carry ANSI.
+          // Plain text, not renderAgentName: the same label activity cards and FleetView
+          // show, but the autocomplete description cannot carry ANSI.
           () => mentionRoster(manager, mentionTypes(), type => getConfig(type).displayName),
           isAgentMentionsEnabled,
         ),
@@ -1293,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
 
     // Evicted, but its conversation is still on disk: reopen it. This is an
     // ordinary spawn carrying a session file, so the new record picks up the
-    // widget, fleet row, transcript and completion notification unchanged —
+    // aggregate activity card, FleetView row, transcript and completion notification unchanged —
     // and `reclaim` hands it back the names the tombstone was holding.
     if (resolved?.kind === "tombstone") {
       const entry = resolved.entry;
@@ -1365,8 +1383,8 @@ export default function (pi: ExtensionAPI) {
     // Claude Code never starts the agent itself: `@agent-<type>` becomes an
     // attachment asking the main model to do it, and the model writes the
     // agent's prompt from the conversation rather than forwarding the typed
-    // text. That buys a real `Agent` tool call — transcript, per-tool widget
-    // detail, tool-use-id correlation, join grouping — and a prompt with the
+    // text. That buys a real `Agent` tool call — transcript, activity-card status,
+    // tool-use-id correlation, join grouping — and a prompt with the
     // context a cold spawn lacks.
     //
     // It also costs a visible turn, spent narrating a decision the user already
@@ -1384,7 +1402,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`Prompting ${label}…`, "info");
       // Not awaited: the clone runs a full model turn, and prompt() is blocked
       // until this hook returns. The user gets their prompt back immediately
-      // and the agent appears in the widget when it starts.
+      // and the agent appears in its activity card and FleetView when it starts.
       void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool })
         .then((result) => {
           if (result.spawned) return;
@@ -1411,7 +1429,7 @@ export default function (pi: ExtensionAPI) {
     try {
       // Nothing else to pass: runAgent resolves model, thinking and max turns
       // from the agent's own config when the spawn omits them, and the
-      // manager's onStart/onComplete callbacks own the widget, the fleet list
+      // manager's onStart/onComplete callbacks own the activity card, FleetView
       // and the completion notification — the same contract the scheduler and
       // cross-extension RPC spawns run under.
       spawnTopLevel(pi, ctx, type, mention.message, {
@@ -1458,13 +1476,20 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("message_start", (event) => {
+  pi.on("message_start", (event, ctx) => {
     if (!mainCard) return;
     if (event.message.role === "user") {
+      if (mainCardWaitingForContinuation) {
+        mainOutcome = { status: "stopped" };
+        finishMainCard();
+        startMainCard(ctx);
+        suppressMainToolOutput(ctx);
+      }
       scheduleMainCardAppend();
       return;
     }
     if (event.message.role !== "assistant") return;
+    mainCardWaitingForContinuation = false;
     mainResponseText = "";
     mainThinkingText = "";
     activityCards.apply(mainCard, { type: "text", fullText: "" });
@@ -1483,7 +1508,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     if (event.message.role === "user") {
       scheduleMainCardAppend();
       return;
@@ -1499,6 +1524,7 @@ export default function (pi: ExtensionAPI) {
     };
     addUsage(mainCard.lifetimeUsage, usage);
     activityCards.apply(mainCard, { type: "usage", usage });
+    refreshMainCardContext(ctx);
   });
 
   pi.on("tool_execution_start", (event) => {
@@ -1509,28 +1535,38 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_end", (event) => {
     if (!mainCard) return;
     mainCard.toolUses++;
+    if (event.toolName === "Agent" && !event.isError) {
+      const agentId = event.result?.details?.agentId;
+      const record = typeof agentId === "string" ? manager.getRecord(agentId) : undefined;
+      if (record) mainCardPendingRuns.add(mainCardRunKey(record.id, record.runRevision));
+    }
     activityCards.apply(mainCard, { type: "tool", activity: { type: "end", toolName: event.toolName } });
   });
 
-  pi.on("turn_end", () => {
+  pi.on("turn_end", (_event, ctx) => {
     if (!mainCard) return;
     mainTurnCount++;
     activityCards.apply(mainCard, { type: "turn", turnCount: mainTurnCount });
+    refreshMainCardContext(ctx);
   });
 
   pi.on("session_compact", (event) => {
     if (!mainCard) return;
     mainCard.compactionCount++;
+    mainCard.contextPercent = undefined;
     activityCards.apply(mainCard, {
       type: "compaction",
       info: { reason: event.reason, tokensBefore: event.compactionEntry.tokensBefore },
     });
+    activityCards.apply(mainCard, { type: "context", percent: null });
   });
 
   pi.on("session_before_switch", () => {
     persistActivityCardsBeforeInvalidation(true);
     sessionGeneration += 1;
     currentCtx = undefined;
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = undefined;
     restoreMainToolOutput();
     clearPendingCompletionDelivery();
     clearMainCardAppendTimer();
@@ -1548,7 +1584,12 @@ export default function (pi: ExtensionAPI) {
   // `before-continuation` in its settlement handler. Keep this call synchronous;
   // any future async settlement path must claim before its first await.
   pi.on("agent_settled", () => {
-    finishMainCard();
+    if (mainCardPendingRuns.size > 0 && mainOutcome.status === "completed") {
+      mainCardWaitingForContinuation = true;
+      appendMainCard();
+    } else {
+      finishMainCard();
+    }
     attemptCompletionDelivery();
   });
 
@@ -1570,6 +1611,8 @@ export default function (pi: ExtensionAPI) {
       delete (globalThis as any)[MANAGER_KEY];
     }
     clearPendingCompletionDelivery();
+    restoreToolExecutionRows?.();
+    restoreToolExecutionRows = undefined;
     restoreMainToolOutput();
     activityTicker.dispose();
     clearMainCardAppendTimer();
@@ -1587,16 +1630,6 @@ export default function (pi: ExtensionAPI) {
     // handlers would never run. Internally bounded, so a hung one can't strand quit.
     await manager.dispose();
   });
-
-  // Live widget: show running agents above editor.
-  // widgetMode (default "background") selects what the widget shows: "all" =
-  // every agent; "background" = hide only internal manager runs explicitly
-  // marked foreground (external top-level Agent/RPC paths are background-only);
-  // "off" = hide the widget entirely. Read live at render time.
-  let widgetMode: WidgetMode = "background";
-  function getWidgetMode(): WidgetMode { return widgetMode; }
-  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled);
-  function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
   const fleet = new FleetList(manager, agentActivity, isShowCostEnabled);
@@ -1767,9 +1800,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     agentActivity.set(id, bgState);
-    widget.markRunning(id);
-    widget.ensureTimer();
-    widget.update();
     fleet.ensureTimer();
     fleet.update();
 
@@ -1783,12 +1813,10 @@ export default function (pi: ExtensionAPI) {
     return record;
   }
 
-  // Grab UI context from first tool execution + clear lingering widget on new turn
+  // Grab UI context from first tool execution.
   pi.on("tool_execution_start", async (_event, ctx) => {
-    widget.setUICtx(ctx.ui as UICtx);
     activityTicker.setUICtx(ctx.ui as UICtx);
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
-    widget.onTurnStart();
   });
 
   /** Build the full type list text dynamically from available agents only. */
@@ -1842,7 +1870,6 @@ export default function (pi: ExtensionAPI) {
       setFleetView: setFleetViewEnabled,
       setAgentMentions: setAgentMentionMode,
       setRememberAgents,
-      setWidgetMode: setWidgetMode,
       setOutputTranscript: setOutputTranscriptDefault,
       setWorktreeIsolation: setWorktreeIsolationEnabled,
       setMaxSubagentDepth: setMaxSubagentDepth,
@@ -2077,9 +2104,6 @@ Terse command-style prompts produce shallow, generic work.
     // ---- Execute ----
 
     execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
-      // Ensure we have UI context for widget rendering
-      widget.setUICtx(ctx.ui as UICtx);
-
       // Reload custom agents so new project/global .md files are picked up without restart
       reloadCustomAgents();
 
@@ -2373,8 +2397,6 @@ Terse command-style prompts produce shallow, generic work.
         }
 
         agentActivity.set(id, bgState);
-        widget.ensureTimer();
-        widget.update();
         fleet.ensureTimer();
         fleet.update();
 
@@ -3172,7 +3194,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
       fleetView: isFleetViewEnabled(),
       agentMentions: getAgentMentionMode(),
       rememberAgents: getRememberAgents(),
-      widgetMode: getWidgetMode(),
       outputTranscript: getOutputTranscriptDefault(),
       worktreeIsolation: isWorktreeIsolationEnabled(),
       maxSubagentDepth: getMaxSubagentDepth(),
@@ -3311,7 +3332,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
           id: "showCost",
           label: "Show cost",
           description:
-            "Show an estimated `~$0.0042` beside subagent token counts in the widget, fleet view, results and notifications. Priced by pi from the model's rates — omitted entirely for a model it has no rates for.",
+            "Show an estimated `~$0.0042` beside subagent token counts in activity cards, FleetView, results and notifications. Priced by pi from the model's rates — omitted entirely for a model it has no rates for.",
           currentValue: isShowCostEnabled() ? "on" : "off",
           values: ["on", "off"],
         },
@@ -3335,13 +3356,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description: "Persist subagent sessions so `@handle` can resume one long after it finished (they also appear in /resume)",
           currentValue: getRememberAgents() ? "on" : "off",
           values: ["on", "off"],
-        },
-        {
-          id: "widgetMode",
-          label: "Widget",
-          description: "Above-editor agent widget: all = every agent; background = hide internal manager runs explicitly marked foreground (external top-level runs are always background); off = hide the widget.",
-          currentValue: getWidgetMode(),
-          values: ["all", "background", "off"],
         },
         {
           id: "toolDescriptionMode",
@@ -3469,9 +3483,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
         const enabled = value === "on";
         setRememberAgents(enabled);
         notifyApplied(ctx, `Remember agents ${enabled ? "enabled" : "disabled"}`);
-      } else if (id === "widgetMode") {
-        setWidgetMode(value as WidgetMode);
-        notifyApplied(ctx, `Widget set to ${value}`);
       }
     }
 

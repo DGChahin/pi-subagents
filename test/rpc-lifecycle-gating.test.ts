@@ -36,6 +36,7 @@ function makePi() {
   const busHandlers = new Map<string, (raw: any) => unknown>(); // pi.events.on(...) — rpc channels
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
@@ -62,12 +63,17 @@ function ctx(hasUI = false, setWidget = vi.fn()) {
       onTerminalInput: vi.fn(() => vi.fn()),
       getEditorText: vi.fn(() => ""),
       custom: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
     },
     cwd: process.cwd(),
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
     sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
     getSystemPrompt: vi.fn(() => "parent"),
+    getContextUsage: vi.fn(() => ({ percent: null })),
   } as any;
 }
 
@@ -168,83 +174,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     await lifecycle.get("session_shutdown")?.();
   });
 
-  it("renders an RPC-spawned agent in the native widget while it is running", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
-    const activeCtx = ctx(true);
-    subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, activeCtx);
-
-    vi.mocked(runAgent).mockImplementation(runUntilAborted);
-    try {
-      await busHandlers.get("subagents:rpc:spawn")!({
-        requestId: "req-widget",
-        type: "general-purpose",
-        prompt: "go",
-        options: { description: "visible RPC agent" },
-      });
-
-      await vi.waitFor(() => {
-        expect(activeCtx.ui.setWidget).toHaveBeenCalledWith(
-          "agents",
-          expect.any(Function),
-          { placement: "aboveEditor" },
-        );
-      });
-    } finally {
-      await lifecycle.get("session_shutdown")();
-    }
-  });
-
-  it("does not render duplicate activity text for an RPC-spawned background agent", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
-    let widgetFactory: any;
-    const setWidget = vi.fn((key: string, content: any) => {
-      if (key === "agents" && content) widgetFactory = content;
-    });
-    const extensionCtx = ctx(true, setWidget);
-    let onToolActivity: ((activity: { type: "start" | "end"; toolName: string }) => void) | undefined;
-    vi.mocked(runAgent).mockImplementation((_ctx, _type, _prompt, options: any) => {
-      onToolActivity = options.onToolActivity;
-      const session = { subscribe: () => vi.fn(), dispose: vi.fn() };
-      options.onSessionCreated?.(session);
-      return new Promise((resolve) => {
-        const finish = () => resolve({
-          responseText: "",
-          session,
-          aborted: true,
-          steered: false,
-        });
-        if (options.signal?.aborted) finish();
-        else options.signal?.addEventListener("abort", finish, { once: true });
-      }) as any;
-    });
-    subagentsExtension(pi);
-
-    await lifecycle.get("session_start")({}, extensionCtx);
-    // TaskExecute runs inside a root tool call, so the extension already has
-    // the UI context before pi-tasks sends its cross-extension spawn request.
-    await lifecycle.get("tool_execution_start")({}, extensionCtx);
-    await busHandlers.get("subagents:rpc:spawn")!({
-      requestId: "req-activity",
-      type: "general-purpose",
-      prompt: "go",
-      options: { description: "rpc activity test", isBackground: true },
-    });
-    await vi.waitFor(() => expect(onToolActivity).toBeTypeOf("function"));
-    onToolActivity!({ type: "start", toolName: "bash" });
-
-    expect(widgetFactory).toBeTypeOf("function");
-    const lines = widgetFactory(
-      { terminal: { columns: 120 }, requestRender: vi.fn() },
-      { fg: (_color: string, text: string) => text, bold: (text: string) => text },
-    ).render().join("\n");
-    expect(lines).toContain("rpc activity test");
-    expect(lines).not.toContain("running command…");
-    expect(lines).not.toContain("thinking…");
-
-    await lifecycle.get("session_shutdown")?.();
-  });
 
   it("is idempotent — a second session_start does not re-advertise or double-register", async () => {
     const { pi, lifecycle } = makePi();

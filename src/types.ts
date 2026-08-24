@@ -94,15 +94,6 @@ export interface AgentConfig {
 export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
- * Display mode for the persistent above-editor agent widget.
- * - `all`: show every agent, including internal foreground manager runs.
- * - `background`: hide those internal foreground runs (they already render
- *   inline, #118); show all external top-level Agent/RPC/scheduled runs.
- * - `off`: hide the widget entirely.
- */
-export type WidgetMode = 'all' | 'background' | 'off';
-
-/**
  * How `@handle message` starts an agent that is not already running.
  * - `model`: inject Claude Code's `agent_mention` reminder and let the main
  *   model spawn it with the `Agent` tool, which is what Claude Code does.
@@ -225,7 +216,8 @@ export interface AgentRecord {
    * internal foreground run with an inline result, `undefined` = a legacy direct
    * manager caller omitted the field. Externally reachable top-level Agent,
    * registry, RPC, mention, and scheduler paths all set/canonicalize this to true.
-   * The widget excludes only explicit false in background mode.
+   * Aggregate activity cards show run activity, while FleetView is the separate
+   * subagent indicator; this field controls execution semantics, not visibility.
    */
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */

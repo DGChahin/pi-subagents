@@ -19,6 +19,7 @@ function makePi() {
   return {
     pi: {
       registerMessageRenderer: vi.fn(),
+      registerMarkdownTransformer: vi.fn(),
       registerTool: vi.fn((tool: any) => {
         tools.set(tool.name, tool);
       }),
@@ -50,6 +51,10 @@ function makeHeadlessCtx() {
     ui: {
       setStatus: vi.fn(),
       setWidget: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
     },
     cwd: "/tmp",
     model: undefined,

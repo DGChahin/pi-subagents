@@ -36,6 +36,7 @@ function makePi() {
   const emitted: { event: string; payload: any }[] = [];
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
@@ -52,7 +53,15 @@ function makePi() {
 function makeCtx(cwd: string) {
   return {
     hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+    ui: {
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      notify: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
+    },
     cwd,
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },

@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 10) and smart group join (consolidated notifications)
-- **Live widget UI** — persistent above-editor widget with animated spinners, live tool activity, token counts, and colored status icons. Configurable via `/agents → Settings → Widget`: `background` (default), `all` (also includes internal manager runs explicitly marked foreground), or `off`. External top-level Agent and RPC runs are always background
+- **Unified activity cards** — one aggregate `Main` activity card per user prompt, spanning the prompt through the final assistant response including background-agent continuation, plus one launch-to-terminal card per top-level subagent run. Cards show a summary, usage, context utilization, and normalized one-line current thinking/activity. Individual Pi thinking, working, tool-call, and tool-result rows stay out of the TUI, including rows for built-in tools and tools registered by unrelated extensions. FleetView remains the footer's persistent subagent list.
 - **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Stop a still-running agent by pressing `x` (then `x` again to confirm) — both work for background agents too
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions, and Claude Code-compatible colored name badges
@@ -42,6 +42,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 ```bash
 pi install npm:@tintinweb/pi-subagents
 ```
+Requires the `@earendil-works/pi-coding-agent` runtime at version `0.84.2` or newer.
 
 Or load directly for development:
 
@@ -97,22 +98,11 @@ Restrictions:
 
 ## UI
 
-The extension renders a persistent widget above the editor showing active agents. Top-level `Agent` and RPC calls always run in background, so the default `widgetMode: background` shows them all. Switch to `all` to also include internal manager runs explicitly marked foreground, or `off` to hide the widget, via `/agents → Settings → Widget`:
+### Activity cards
 
-```
-● Agents
-├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 5 tool uses · 33.8k token (62%) · 12.3s
-│    ⎿  editing 2 files…
-├─ ⠹ Explore  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
-│    ⎿  searching…
-├─ ⠹ Agent  Long-running task · ↻42 · 38 tool uses · 91.0k token (84% · ⇊2) · 2m17s
-│    ⎿  reading…
-└─ 2 queued
-```
+Each user prompt gets one aggregate `Main` activity card spanning from the prompt through the final assistant response, including background-agent continuation, and each top-level subagent run gets one launch-to-terminal card. Cards update in place and show a summary, usage, context utilization, and normalized one-line current thinking/activity. Individual Pi thinking, working, tool-call, and tool-result rows stay out of the TUI, including rows for built-in tools and tools registered by unrelated extensions. FleetView stays in the footer for subagent details.
 
-The token field is annotated with two optional signals inside parens:
-- **`NN%`** — context-window utilization (color-coded: <70% dim, 70–85% warning, ≥85% error). Omitted when the model has no declared `contextWindow`, or briefly right after compaction.
-- **`⇊N`** — number of times the session has compacted, when > 0. Stays dim; the percent's color carries urgency.
+> **Temporary Pi compatibility workaround:** Pi does not currently provide a supported renderer-only override for tools owned by another extension. Until Pi ships that API, pi-subagents temporarily overrides the exported `ToolExecutionComponent.render()` method for active TUI sessions and restores it on session switch or shutdown. This relies on Pi TUI internals and can require adjustment after a Pi upgrade. Another extension that replaces the same method without delegating to the previous renderer can bypass this suppression; extension load order then determines which patch wins. The relevant [Pi issue #8347](https://github.com/earendil-works/pi/issues/8347) and unmerged [Pi PR #8343](https://github.com/earendil-works/pi/pull/8343) were auto-closed by Pi's contribution-policy bot and have not been accepted upstream. The workaround will be removed after Pi releases an equivalent supported API and pi-subagents adopts it.
 
 ### FleetView
 
@@ -164,7 +154,7 @@ The cost is a visible turn — the model's reasoning and its tool block, narrati
 @cyan whats your favorite color        →  (nothing in the chat)
   └─ clone of this conversation, off-screen
        └─ Agent(subagent_type: "cyan", prompt: …)
-            ▸ Cyan Agent   favorite color        ← widget, fleet row, handle
+            ▸ Cyan Agent   favorite color        ← FleetView row, handle
 ```
 
 It is a literal clone — the session's own entries and the same system prompt, not [`inherit_context`](#agent-frontmatter)'s text rendering of them — taken from memory and compaction-aware, so what the copy reads is what the main model is working from. The clone gets one tool and one job; it cannot read, write or run anything, because an invisible turn with the full toolset could do invisible work. The agent it starts is attributed to the *real* session, so its transcript and `rootSessionId` land where they would have anyway, and it carries no `tool-use-id` — the main conversation never issued one.
@@ -201,16 +191,6 @@ While an agent is live its handle addresses *it*, so `@explore` never starts a s
 
 A `direct`-mode start takes the non-tool spawn path shared with the scheduler and cross-extension RPC, so — like those — it writes no `.output` transcript. That is the trade for skipping the model call: a `model`-mode start goes through the real `Agent` tool and keeps everything. Live tool activity and the turn counter are *not* part of that trade — a direct start renders them like any other agent. A mention-*resumed* agent goes through the full resume wiring and keeps both in either mode.
 
-Individual agent results render Claude Code-style in the conversation:
-
-| State | Example |
-|-------|---------|
-| **Running** | `⠹ ↻3≤30 · 3 tool uses · 12.4k token (8%)` / `⎿ searching, reading 3 files…` |
-| **Completed** | `✓ ↻8 · 5 tool uses · 33.8k token (62%) · 12.3s` / `⎿ Done` |
-| **Wrapped up** | `✓ ↻50≤50 · 50 tool uses · 89.1k token (84% · ⇊2) · 45.2s` / `⎿ Wrapped up (turn limit)` |
-| **Stopped** | `■ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Stopped` |
-| **Error** | `✗ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Error: timeout` |
-| **Aborted** | `✗ ↻55≤50 · 55 tool uses · 102.3k token (95% · ⇊3)` / `⎿ Aborted (max turns exceeded)` |
 
 Completion callbacks keep only a short visual preview. Use `get_subagent_result` to retrieve the full stored output.
 
@@ -288,8 +268,8 @@ All fields are optional — sensible defaults for everything.
 |-------|---------|-------------|
 | `description` | filename | Agent description shown in tool listings |
 | `name` | filename | **The agent's type** — what `subagent_type` and `@handle` address. Claude Code's rule: the filename doesn't have to match, so `blubb.md` with `name: code-review` dispatches as `code-review`. Omit it and the filename is used. Any value works except one containing `:`, which Claude Code reserves for plugin-scoped identifiers — such a file is skipped with a warning. Two files may declare the same name; the later load wins, as a filename clash always did |
-| `display_name` | the type | Label shown in the UI (widget, agent list, badges) — cosmetic only, and independent of `name`. Claude Code has no equivalent; a file that sets only `name` badges as its type, unchanged |
-| `color` | — | Background color for the agent name badge in the Agent tool header, widget, FleetView, and conversation viewer. Supports Claude Code's `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan` (the values its own default theme uses); quoted six-digit hex such as `"#8B5CF6"`; and Agency Agents aliases (`amber`, `teal`, `indigo`, `gold`, `neon-green`, `neon-cyan`, `metallic-blue`, `violet`, `rose`, `lime`, `gray`/`grey`, `fuchsia`, `slate`, `navy`). Badge text is black or white, whichever clears 4.5:1 against the rendered background — Claude Code uses one inverse color for every badge. Invalid values render no badge and preserve each surface's existing theme foreground |
+| `display_name` | the type | Label shown in the UI (agent list, badges) — cosmetic only, and independent of `name`. Claude Code has no equivalent; a file that sets only `name` badges as its type, unchanged |
+| `color` | — | Background color for the agent name badge in the Agent tool header, FleetView, and conversation viewer. Supports Claude Code's `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan` (the values its own default theme uses); quoted six-digit hex such as `"#8B5CF6"`; and Agency Agents aliases (`amber`, `teal`, `indigo`, `gold`, `neon-green`, `neon-cyan`, `metallic-blue`, `violet`, `rose`, `lime`, `gray`/`grey`, `fuchsia`, `slate`, `navy`). Badge text is black or white, whichever clears 4.5:1 against the rendered background — Claude Code uses one inverse color for every badge. Invalid values render no badge and preserve each surface's existing theme foreground |
 | `tools` | all 7 | Which tools the agent can call. Built-in names (`read, grep, …`), `*` / `all` (all built-ins), `none`, and `ext:<extension>` / `ext:<extension>/<tool>` selectors for extension tools. See [Tool & extension scoping](#tool--extension-scoping) below |
 | `extensions` | `true` | Which extensions to load for the agent. `true` (all defaults), `false` (none), or an explicit list: `[mcp, "/abs/path.ts", "*"]`. See [Tool & extension scoping](#tool--extension-scoping) below |
 | `exclude_extensions` | — | Extension denylist applied after `extensions:` — exclude wins. Plain names only (case-insensitive), no paths or `*`. Useful with `extensions: true` to drop one extension (e.g. `pi-notify`) |
@@ -470,7 +450,7 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 
 ## Concurrency
 
-Top-level Agent starts and asynchronous resumes always run in background and are subject to a configurable concurrency limit (default: 10). Excess work is automatically queued and starts as running agents complete. The widget shows queued work as a collapsed count. The higher default keeps ordinary parallel fan-outs from queueing now that every top-level dispatch takes a slot.
+Top-level Agent starts and asynchronous resumes always run in background and are subject to a configurable concurrency limit (default: 10). Excess work is automatically queued and starts as running agents complete. The higher default keeps ordinary parallel fan-outs from queueing now that every top-level dispatch takes a slot.
 
 Internal package operations, scheduled fires, and nested agents retain their existing queue behavior.
 
@@ -513,7 +493,7 @@ When on, each subagent spawn's effective model is validated against pi's own `en
 
 ## Persistent Settings
 
-Runtime tuning values set via `/agents` → Settings (max concurrency, default max turns, grace turns, nested depth, fallback agent, default join mode, scheduling on/off, scope models on/off, disable defaults on/off, strict agent files on/off, agent mentions on/off, output transcript on/off, tool description full/compact/custom, widget all/background/off, usage reporting on/off, cost display on/off) persist across pi restarts. Two files, merged on load:
+Runtime tuning values set via `/agents` → Settings (max concurrency, default max turns, grace turns, nested depth, fallback agent, default join mode, scheduling on/off, scope models on/off, disable defaults on/off, strict agent files on/off, agent mentions on/off, output transcript on/off, tool description full/compact/custom, usage reporting on/off, cost display on/off) persist across pi restarts. Two files, merged on load:
 
 - **Global:** `~/.pi/agent/subagents.json` — your machine-wide defaults. Edit by hand; the `/agents` menu never writes here.
 - **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings.
@@ -542,7 +522,7 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, default m
 
 Three things worth knowing about the numbers. Every token component is reported, `cacheRead` included — the cached prefix genuinely is re-read and re-billed on every call, and pi counts it the same way for the session's own messages, so withholding it would make a subagent's rows count differently from every other row in one total. (The extension's *own* token displays still leave it out, which is a different question: there it inflates a reading of how much work was done.) Cost is pi's own per-message figure, priced from the model's listed rates; a model pi has no rates for contributes zero rather than an estimate. And the context-window percentage is untouched: pi derives it from assistant messages alone, so a delegating session's context doesn't appear to fill up faster. Agents that finish in the background have no tool result of their own to ride on, so their spend is carried by the next one you make — the footer catches up on the following call, not the moment they finish.
 
-**Show cost** (`showCost`, default `false`): whether the subagent surfaces print an estimated cost beside their token counts — the widget (running *and* finished lines), [FleetView](#fleetview), the conversation viewer, foreground results, `get_subagent_result`, and completion notifications:
+**Show cost** (`showCost`, default `false`): whether the subagent surfaces print an estimated cost beside their token counts — [FleetView](#fleetview), the conversation viewer, foreground results, `get_subagent_result`, and completion notifications:
 
 ```text
 ├─ ⠹ Explore  inspect code · ↻3 · 8.2k token · ~$0.0042 · 4.1s
@@ -616,7 +596,7 @@ When the parent is idle, pi-subagents synchronously emits `context-compact:befor
 
 pi-subagents accepts `context-compact:barrier-open` only when `barrierId`, compactor `sessionId`, and compactor `generation` exactly match the held barrier. Outcomes `compacted` and `failed` retry delivery: it re-emits `context-compact:before-continuation`, confirms the same parent session is still idle, and then sends one coalesced callback with `triggerTurn: true` if no listener holds it again. The callback names every pending agent ID; full results remain in package state for `get_subagent_result`. Outcome `invalidated` discards held completions for the captured parent session generation and does not retry them. A mismatched barrier event has no effect. If no extension claims the request with a complete identity, idle delivery continues immediately for backward compatibility.
 
-`tokens.total` = `input + output + cacheWrite`. `cacheRead` is excluded — each turn's `cacheRead` is the cumulative cached prefix re-read on that one API call, so summing per-message would over-count it as a measure of work done. Use `contextUsage.percent` (surfaced as `(NN%)` in the widget) for current context size.
+`tokens.total` = `input + output + cacheWrite`. `cacheRead` is excluded — each turn's `cacheRead` is the cumulative cached prefix re-read on that one API call, so summing per-message would over-count it as a measure of work done. Use `contextUsage.percent` for current context size.
 
 `usage` answers the other question — what was billed — and so does include `cacheRead`, because the prefix really is re-read and re-charged on every call. It is a pi `Usage`, the same shape pi puts on `ToolResultEvent` and `AssistantMessage`, so `usage.cost.total` is where a listener already expects the money and anything pi adds to `Usage` arrives without a change here. Neither field derives from the other; `tokens` is a view model, `usage` is the data.
 
@@ -673,7 +653,7 @@ pi.events.emit("subagents:rpc:spawn", {
 });
 ```
 
-`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema. The tool spelling `run_in_background` is forwarded verbatim and ignored. The manager spelling `isBackground` is compatibility-only at this external boundary: it is canonicalized to `true`, including when omitted or explicitly `false`. Every RPC spawn therefore returns its id immediately, runs detached, occupies a `maxConcurrent` slot (queueing when full), reports `isBackground: true` in lifecycle data, and remains visible in the widget's default `background` mode. RPC cannot re-enable foreground top-level execution. Nested spawns stay hidden from top-level surfaces.
+`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema. The tool spelling `run_in_background` is forwarded verbatim and ignored. The manager spelling `isBackground` is compatibility-only at this external boundary: it is canonicalized to `true`, including when omitted or explicitly `false`. Every RPC spawn therefore returns its id immediately, runs detached, occupies a `maxConcurrent` slot (queueing when full), reports `isBackground: true` in lifecycle data, and remains available in the footer FleetView. RPC cannot re-enable foreground top-level execution. Nested spawns stay hidden from top-level surfaces.
 
 `options.model` accepts either a `Model` object (e.g. `ctx.model`) or a `"provider/modelId"` string — strings are resolved against `ctx.modelRegistry` at the RPC boundary, so cross-extension callers can forward serializable values without losing auth context.
 
@@ -840,7 +820,8 @@ src/
   env.ts              # Environment detection (git, platform)
 
   ui/
-    agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
+    activity-card.ts       # Inline activity cards: status, usage, and current activity
+    agent-widget.ts        # Shared activity types, labels, formatting, and theme helpers
     fleet-list.ts         # FleetView: navigable agent list below the editor
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
     viewer-keys.ts        # Viewer scroll keys resolved through user keybindings

@@ -129,7 +129,7 @@ describe("ConversationViewer", () => {
 
     const toolActivity = {
       ...emptyActivity,
-      activeTools: new Map([["read", "file.ts"]]),
+      activeTools: new Map([["read-1", "read"]]),
     };
     const toolViewer = new ConversationViewer(
       mockTui(30, 80),
