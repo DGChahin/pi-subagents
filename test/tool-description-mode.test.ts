@@ -20,6 +20,7 @@ function makePi() {
   return {
     pi: {
       registerMessageRenderer: vi.fn(),
+      registerMarkdownTransformer: vi.fn(),
       registerTool: vi.fn((tool: any) => {
         tools.set(tool.name, tool);
       }),
@@ -67,7 +68,15 @@ describe("toolDescriptionMode", () => {
     const { pi, tools, handlers } = makePi();
     subagentsExtension(pi);
     shutdown = async () => {
-      await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} } as any);
+      await handlers.get("session_shutdown")?.({}, {
+        hasUI: false,
+        ui: {
+          getToolsExpanded: vi.fn(() => true),
+          setToolsExpanded: vi.fn(),
+          setWorkingVisible: vi.fn(),
+          setHiddenThinkingLabel: vi.fn(),
+        },
+      } as any);
     };
     return tools;
   }

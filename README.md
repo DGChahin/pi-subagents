@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 10) and smart group join (consolidated notifications)
-- **Unified activity cards** — one aggregate card per main user→assistant cycle and one per complete subagent run, showing a summary, usage, context, and one-line current thinking in place. Subagent run details remain available in the footer FleetView
+- **Unified activity cards** — one aggregate `Main` activity card per user prompt, spanning the prompt through the final assistant response including background-agent continuation, plus one launch-to-terminal card per top-level subagent run. Cards show a summary, usage, context utilization, and normalized one-line current thinking/activity. Individual Pi thinking, working, tool-call, and tool-result rows stay out of the TUI, including rows for built-in tools and tools registered by unrelated extensions. FleetView remains the footer's persistent subagent list.
 - **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Stop a still-running agent by pressing `x` (then `x` again to confirm) — both work for background agents too
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions, and Claude Code-compatible colored name badges
@@ -42,6 +42,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 ```bash
 pi install npm:@tintinweb/pi-subagents
 ```
+Requires the `@earendil-works/pi-coding-agent` runtime at version `0.84.2` or newer.
 
 Or load directly for development:
 
@@ -99,7 +100,7 @@ Restrictions:
 
 ### Activity cards
 
-Each main user→assistant cycle gets one aggregate activity card, and each complete subagent run gets one card. The card updates in place through the active cycle or run and settles with its final outcome. Cards show a summary, usage, context, and one-line current thinking in place. Individual tool-call and tool-result rows stay out of the TUI transcript, including rows for built-in tools and tools registered by unrelated extensions. Subagent run details remain available in the footer FleetView; no other subagent indicators are shown.
+Each user prompt gets one aggregate `Main` activity card spanning from the prompt through the final assistant response, including background-agent continuation, and each top-level subagent run gets one launch-to-terminal card. Cards update in place and show a summary, usage, context utilization, and normalized one-line current thinking/activity. Individual Pi thinking, working, tool-call, and tool-result rows stay out of the TUI, including rows for built-in tools and tools registered by unrelated extensions. FleetView stays in the footer for subagent details.
 
 > **Temporary Pi compatibility workaround:** Pi does not currently provide a supported renderer-only override for tools owned by another extension. Until Pi ships that API, pi-subagents temporarily overrides the exported `ToolExecutionComponent.render()` method for active TUI sessions and restores it on session switch or shutdown. This relies on Pi TUI internals and can require adjustment after a Pi upgrade. Another extension that replaces the same method without delegating to the previous renderer can bypass this suppression; extension load order then determines which patch wins. The relevant [Pi issue #8347](https://github.com/earendil-works/pi/issues/8347) and unmerged [Pi PR #8343](https://github.com/earendil-works/pi/pull/8343) were auto-closed by Pi's contribution-policy bot and have not been accepted upstream. The workaround will be removed after Pi releases an equivalent supported API and pi-subagents adopts it.
 
@@ -820,6 +821,7 @@ src/
 
   ui/
     activity-card.ts       # Inline activity cards: status, usage, and current activity
+    agent-widget.ts        # Shared activity types, labels, formatting, and theme helpers
     fleet-list.ts         # FleetView: navigable agent list below the editor
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
     viewer-keys.ts        # Viewer scroll keys resolved through user keybindings

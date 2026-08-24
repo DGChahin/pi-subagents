@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Activity-card streaming no longer overflows the editor.** Thinking and response text is collapsed to one line before the card refreshes, and the duplicate outside-card activity and running status lines are no longer rendered.
+- **Activity-card rendering now covers the full interaction lifecycle.** One `Main` card spans each user prompt through its final assistant response, including background-agent continuation; each top-level subagent gets one launch-to-terminal card, with normalized one-line activity and Pi's thinking, working, and tool rows hidden from the TUI.
 
 ## [0.18.0] - 2026-08-20
 

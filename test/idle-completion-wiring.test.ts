@@ -37,6 +37,7 @@ function makePi(): Harness {
   });
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((tool: { name: string; execute: (...args: unknown[]) => Promise<Record<string, unknown>> }) => {
       tools.set(tool.name, tool);
     }),
@@ -53,7 +54,15 @@ function makeCtx(sessionId: string, idle: () => boolean) {
   return {
     hasUI: false,
     isIdle: idle,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+    ui: {
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      notify: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
+    },
     cwd: process.cwd(),
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },

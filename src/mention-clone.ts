@@ -42,8 +42,8 @@
  * clone:
  *
  *   - the clone is handed the *registered* `Agent` tool, whose handler closes
- *     over the main activation, so it spawns top-level: widget, fleet row,
- *     handle, completion notification, all as if the main model had called it;
+ *     over the main activation, so it spawns top-level: activity card, FleetView
+ *     row, handle, completion notification, all as if the main model had called it;
  *   - that tool is re-bound to the main `ExtensionContext`, because the handler
  *     reads `cwd`, `model` and `sessionManager.getSessionId()` off it to place
  *     the transcript and the `rootSessionId`. The clone's own context would

@@ -10,6 +10,7 @@ function notificationRenderer() {
   const renderers = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn((type: string, renderer: any) => renderers.set(type, renderer)),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
     on: vi.fn(),

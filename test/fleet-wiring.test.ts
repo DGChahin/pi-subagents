@@ -20,7 +20,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
+import { type RunResult, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 
 const BUILTIN_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
@@ -54,7 +54,7 @@ function makePi() {
   return { pi, tools, lifecycle, existingTools };
 }
 
-/** A UI context with the surfaces the widget + fleet touch; setWidget is spied. */
+/** A UI context with the FleetView and main-card surfaces; setWidget is spied. */
 function uiCtx() {
   return {
     setStatus: vi.fn(),
@@ -66,6 +66,8 @@ function uiCtx() {
     custom: vi.fn(),
     getToolsExpanded: vi.fn(() => true),
     setToolsExpanded: vi.fn(),
+    setWorkingVisible: vi.fn(),
+    setHiddenThinkingLabel: vi.fn(),
   };
 }
 
@@ -79,6 +81,8 @@ function ctxWith(ui: ReturnType<typeof uiCtx>) {
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
     sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
     getSystemPrompt: () => "parent",
+    getContextUsage: vi.fn(() => ({ percent: null })),
+    isIdle: vi.fn(() => true),
   } as any;
 }
 
@@ -87,6 +91,24 @@ const flush = async () => {
   await new Promise((r) => setImmediate(r));
   await new Promise((r) => setImmediate(r));
 };
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
+type Lifecycle = ReturnType<typeof makePi>["lifecycle"];
+type TestContext = ReturnType<typeof ctxWith>;
+
+async function startMainPrompt(lifecycle: Lifecycle, ctx: TestContext, prompt: string): Promise<void> {
+  await lifecycle.get("session_start")?.({}, ctx);
+  await lifecycle.get("before_agent_start")?.({ prompt }, ctx);
+  await lifecycle.get("agent_start")?.({}, ctx);
+  await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+  await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
 
 describe("FleetView wiring (real extension lifecycle)", () => {
   let tmpDir: string;
@@ -167,6 +189,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     const ui = uiCtx();
     const ctx = ctxWith(ui);
     await lifecycle.get("session_start")?.({}, ctx);
+    expect(ui.setWorkingVisible).toHaveBeenCalledWith(false);
     expect(ui.setToolsExpanded).toHaveBeenCalledWith(false);
     const transformer = vi.mocked(pi.registerMarkdownTransformer).mock.calls[0]?.[0];
     expect(transformer?.("thinking", { messageType: "assistant-thinking", isStreaming: false })).toBe("");
@@ -209,9 +232,283 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(entries[0]?.[1]).toMatchObject({ displayName: "Main", description: "Main context" });
     expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
     expect(entries.at(-1)?.[1]).toMatchObject({ status: "completed", toolUses: 1, turnCount: 1 });
+    expect(ui.setWorkingVisible).toHaveBeenCalledWith(true);
+    expect(ui.setHiddenThinkingLabel).toHaveBeenCalledWith("");
+    expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith();
     await lifecycle.get("session_shutdown")?.({}, ctx);
     expect(ui.setToolsExpanded).toHaveBeenCalledWith(true);
   });
+
+  it("keeps Main open after an Agent launch until the continuation completes", async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "done",
+      session: { dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
+    });
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ui = uiCtx();
+    const ctx = ctxWith(ui);
+    await startMainPrompt(lifecycle, ctx, "delegate");
+    const activityEntries = () => vi.mocked(pi.appendEntry).mock.calls
+      .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+    const finalEntries = () => vi.mocked(pi.appendEntry).mock.calls
+      .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+    expect(activityEntries()).toHaveLength(1);
+
+    const spawn = await tools.get("Agent").execute(
+      "tc-agent",
+      { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const agentId = spawn.details?.agentId;
+    expect(agentId).toEqual(expect.any(String));
+    expect(spawn.details).toMatchObject({ agentId });
+
+    await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: spawn }, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+    expect(activityEntries()).toHaveLength(1);
+    expect(finalEntries()).toHaveLength(0);
+    expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
+
+    await flush();
+    await new Promise(resolve => setTimeout(resolve, 220));
+    expect(pi.appendEntry).toHaveBeenCalledWith(
+      "subagents:record",
+      expect.objectContaining({ id: agentId, status: "completed" }),
+    );
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+
+    await lifecycle.get("before_agent_start")?.({ prompt: "continue" }, ctx);
+    await lifecycle.get("agent_start")?.({}, ctx);
+    await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
+    await lifecycle.get("message_update")?.({
+      assistantMessageEvent: { type: "text_delta", delta: "continuing" },
+    }, ctx);
+    await lifecycle.get("message_end")?.({
+      message: {
+        role: "assistant",
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+      },
+    }, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+    expect(activityEntries()).toHaveLength(1);
+    expect(finalEntries()).toHaveLength(1);
+    expect(finalEntries()[0]?.[1]).toMatchObject({ status: "completed" });
+    expect(ui.setHiddenThinkingLabel).toHaveBeenCalledWith("");
+    expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith();
+
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
+  it("restarts Main for a new user message during a pending background continuation", async () => {
+    const pendingRun = deferred<RunResult>();
+    vi.mocked(runAgent).mockImplementationOnce(() => pendingRun.promise);
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ui = uiCtx();
+    const ctx = ctxWith(ui);
+
+    try {
+      await startMainPrompt(lifecycle, ctx, "delegate");
+      const spawn = await tools.get("Agent").execute(
+        "tc-pending",
+        { prompt: "go", description: "pending", subagent_type: "general-purpose", run_in_background: true },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(spawn.details?.agentId).toEqual(expect.any(String));
+
+      await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: spawn }, ctx);
+      await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+      await lifecycle.get("agent_settled")?.({}, ctx);
+
+      const mainActivityEntries = () => vi.mocked(pi.appendEntry).mock.calls
+        .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+      const mainFinalEntries = () => vi.mocked(pi.appendEntry).mock.calls
+        .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(0);
+
+      await lifecycle.get("before_agent_start")?.({ prompt: "new prompt" }, ctx);
+      await lifecycle.get("agent_start")?.({}, ctx);
+      await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+      await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(mainActivityEntries()).toHaveLength(2);
+      expect(mainActivityEntries().map(([, data]) => data)).toEqual([
+        expect.objectContaining({ displayName: "Main", description: "Main context", status: "running" }),
+        expect.objectContaining({ displayName: "Main", description: "Main context", status: "running" }),
+      ]);
+      expect(mainFinalEntries()).toHaveLength(1);
+      expect(mainFinalEntries()[0]?.[1]).toMatchObject({
+        displayName: "Main",
+        description: "Main context",
+        status: "stopped",
+      });
+      expect(ui.setWorkingVisible.mock.calls.at(-2)).toEqual([true]);
+      expect(ui.setWorkingVisible).toHaveBeenLastCalledWith(false);
+      expect(ui.setHiddenThinkingLabel.mock.calls.at(-2)).toEqual([]);
+      expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
+    } finally {
+      pendingRun.resolve({
+        responseText: "done",
+        session: { dispose: vi.fn() } as any,
+        aborted: false,
+        steered: false,
+      });
+      await flush();
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+  it("finalizes Main for a successful Agent validation result with no spawned record", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ui = uiCtx();
+    const ctx = ctxWith(ui);
+    await startMainPrompt(lifecycle, ctx, "validate");
+    const runCallsBefore = vi.mocked(runAgent).mock.calls.length;
+    const validation = await tools.get("Agent").execute(
+      "tc-validation",
+      { prompt: "check", description: "validation", subagent_type: "general-purpose", run_in_background: false },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(validation.details).toBeUndefined();
+    expect(vi.mocked(runAgent).mock.calls).toHaveLength(runCallsBefore);
+
+    await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: validation }, ctx);
+    await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await lifecycle.get("agent_settled")?.({}, ctx);
+
+    const activityEntries = vi.mocked(pi.appendEntry).mock.calls.filter(([type]) => type === "subagents:activity");
+    const finalEntries = vi.mocked(pi.appendEntry).mock.calls.filter(([type]) => type === "subagents:activity-final");
+    expect(activityEntries).toHaveLength(1);
+    expect(finalEntries).toHaveLength(1);
+    expect(finalEntries[0]?.[1]).toMatchObject({ status: "completed" });
+    expect(ui.setHiddenThinkingLabel).toHaveBeenCalledWith("");
+    expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith();
+
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
+  it("keeps one Main card across partial delivery continuations for two background runs", async () => {
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ schedulingEnabled: false, defaultJoinMode: "smart" }),
+    );
+    vi.useFakeTimers();
+    const firstRun = deferred<RunResult>();
+    const secondRun = deferred<RunResult>();
+    vi.mocked(runAgent)
+      .mockImplementationOnce(() => firstRun.promise)
+      .mockImplementationOnce(() => secondRun.promise);
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ui = uiCtx();
+    const ctx = ctxWith(ui);
+
+    try {
+      await lifecycle.get("session_start")?.({}, ctx);
+      await lifecycle.get("before_agent_start")?.({ prompt: "parallel work" }, ctx);
+      await lifecycle.get("agent_start")?.({}, ctx);
+      await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
+      await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const spawnParams = (description: string) => ({
+        prompt: `do ${description}`,
+        description,
+        subagent_type: "general-purpose",
+        run_in_background: true,
+      });
+      const first = await tools.get("Agent").execute("tc-first", spawnParams("first"), undefined, undefined, ctx);
+      const second = await tools.get("Agent").execute("tc-second", spawnParams("second"), undefined, undefined, ctx);
+      const firstId = first.details?.agentId;
+      const secondId = second.details?.agentId;
+      expect(firstId).toEqual(expect.any(String));
+      expect(secondId).toEqual(expect.any(String));
+      expect(secondId).not.toBe(firstId);
+
+      await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: first }, ctx);
+      await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: second }, ctx);
+      await vi.advanceTimersByTimeAsync(100);
+      await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+      await lifecycle.get("agent_settled")?.({}, ctx);
+
+      const mainActivityEntries = () => vi.mocked(pi.appendEntry).mock.calls
+        .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+      const mainFinalEntries = () => vi.mocked(pi.appendEntry).mock.calls
+        .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(0);
+      expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
+
+      firstRun.resolve({
+        responseText: "first done",
+        session: { dispose: vi.fn() } as any,
+        aborted: false,
+        steered: false,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pi.appendEntry).toHaveBeenCalledWith(
+        "subagents:record",
+        expect.objectContaining({ id: firstId, status: "completed" }),
+      );
+      expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(0);
+      expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
+
+      await lifecycle.get("before_agent_start")?.({ prompt: "continue after first" }, ctx);
+      await lifecycle.get("agent_start")?.({}, ctx);
+      await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
+      await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+      await lifecycle.get("agent_settled")?.({}, ctx);
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(0);
+
+      secondRun.resolve({
+        responseText: "second done",
+        session: { dispose: vi.fn() } as any,
+        aborted: false,
+        steered: false,
+      });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pi.appendEntry).toHaveBeenCalledWith(
+        "subagents:record",
+        expect.objectContaining({ id: secondId, status: "completed" }),
+      );
+      expect(pi.sendMessage).toHaveBeenCalledTimes(2);
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(0);
+
+      await lifecycle.get("before_agent_start")?.({ prompt: "final continuation" }, ctx);
+      await lifecycle.get("agent_start")?.({}, ctx);
+      await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
+      await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+      await lifecycle.get("agent_settled")?.({}, ctx);
+      expect(mainActivityEntries()).toHaveLength(1);
+      expect(mainFinalEntries()).toHaveLength(1);
+      expect(ui.setHiddenThinkingLabel).toHaveBeenCalledWith("");
+      expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith();
+    } finally {
+      firstRun.resolve({ responseText: "first done", session: { dispose: vi.fn() } as any, aborted: false, steered: false });
+      secondRun.resolve({ responseText: "second done", session: { dispose: vi.fn() } as any, aborted: false, steered: false });
+      vi.useRealTimers();
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+
   it("suppresses built-in and foreign TUI rows without replacing their tool definitions", async () => {
     const { pi, tools, lifecycle, existingTools } = makePi();
     subagentsExtension(pi);

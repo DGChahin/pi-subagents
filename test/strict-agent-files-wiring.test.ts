@@ -19,6 +19,7 @@ function makePi() {
   const tools = new Map<string, any>();
   return {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
     registerCommand: vi.fn(),
     on: vi.fn(),
@@ -110,7 +111,15 @@ describe("strictAgentFiles gates extension activation", () => {
     // non-strict: it returns a normal "unknown type" result, not a YAML throw.
     const uiCtx = {
       hasUI: false,
-      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+      ui: {
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        notify: vi.fn(),
+        getToolsExpanded: vi.fn(() => true),
+        setToolsExpanded: vi.fn(),
+        setWorkingVisible: vi.fn(),
+        setHiddenThinkingLabel: vi.fn(),
+      },
       cwd,
       model: undefined,
       modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },

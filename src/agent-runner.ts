@@ -318,7 +318,7 @@ export function setDefaultMaxTurns(n: number | undefined): void { defaultMaxTurn
  * caller supplied one, else the agent's own `max_turns`, else the project
  * default. `undefined` = unlimited.
  *
- * Exported because the widget's turn counter (`↻3≤20`) has to predict this
+ * Exported because the notification renderer's turn counter (`↻3≤20`) has to predict this
  * before the run starts, and a second copy of the expression would drift from
  * the one below that enforces it.
  */

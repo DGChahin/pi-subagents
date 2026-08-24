@@ -15,7 +15,7 @@
  * foreground agents bypass the pool, but every external top-level dispatch
  * occupies it.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -23,13 +23,16 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
   const lifecycle = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn(),
+    registerMarkdownTransformer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
@@ -43,7 +46,15 @@ function makePi() {
 function ctx() {
   return {
     hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+    ui: {
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      notify: vi.fn(),
+      getToolsExpanded: vi.fn(() => true),
+      setToolsExpanded: vi.fn(),
+      setWorkingVisible: vi.fn(),
+      setHiddenThinkingLabel: vi.fn(),
+    },
     cwd: process.cwd(),
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
@@ -71,6 +82,20 @@ function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
     ctx(),
   );
 }
+
+let hermetic: Hermetic | undefined;
+
+beforeEach(() => {
+  hermetic = hermeticDir({ settings: { outputTranscript: false } });
+  vi.mocked(runAgent).mockReset();
+});
+
+afterEach(() => {
+  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  registerAgents(new Map());
+  hermetic?.restore();
+  hermetic = undefined;
+});
 
 describe("backgroundByDefault", () => {
   it("returns an ID immediately and exposes output through get_subagent_result", async () => {

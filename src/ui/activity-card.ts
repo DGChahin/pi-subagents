@@ -1,9 +1,9 @@
-import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactionInfo } from "../agent-manager.js";
 import type { ToolActivity } from "../agent-runner.js";
 import type { AgentInvocation, SubagentType } from "../types.js";
-import type { LifetimeUsage, UsageDelta } from "../usage.js";
-import { describeActivity, getDisplayName, type Theme, type UICtx } from "./agent-widget.js";
+import { getSessionContextPercent, type LifetimeUsage, type SessionLike, type UsageDelta } from "../usage.js";
+import { describeActivity, formatCost, getDisplayName, type Theme, type UICtx } from "./agent-widget.js";
 
 export const ACTIVITY_ENTRY = "subagents:activity";
 export const ACTIVITY_FINAL_ENTRY = "subagents:activity-final";
@@ -24,6 +24,11 @@ export interface ActivityCardRecord {
   invocation?: AgentInvocation;
   parentAgentId?: string;
   displayName?: string;
+  runRevision?: number;
+  /** Current context-window utilization, when Pi can calculate it. */
+  contextPercent?: number;
+  /** Live session used to refresh context utilization for active cards. */
+  session?: SessionLike;
 }
 /** Durable data written when an activity card is created. */
 export interface ActivityCardData {
@@ -43,12 +48,15 @@ export interface ActivityCardData {
   error?: string;
   compactionCount: number;
   lifetimeUsage: LifetimeUsage;
+  /** Current context-window utilization, omitted when unknown. */
+  contextPercent?: number;
 }
 
 interface ActivityCardState extends ActivityCardData {
   activeTools: Map<string, string>;
   responseText: string;
   thinkingText: string;
+  responseCurrent: boolean;
 }
 
 export type AgentActivityEvent =
@@ -59,6 +67,7 @@ export type AgentActivityEvent =
   | { type: "session" }
   | { type: "usage"; usage: UsageDelta }
   | { type: "compaction"; info: CompactionInfo }
+  | { type: "context"; percent: number | null }
   | { type: "start" };
 
 export type ActivityCardListener = () => void;
@@ -73,6 +82,10 @@ function copyUsage(usage: LifetimeUsage): LifetimeUsage {
   };
 }
 
+function activityCardId(record: ActivityCardRecord): string {
+  return record.runRevision === undefined ? record.id : `${record.id}:${record.runRevision}`;
+}
+
 function stateFromData(data: ActivityCardData): ActivityCardState {
   return {
     ...data,
@@ -81,16 +94,18 @@ function stateFromData(data: ActivityCardData): ActivityCardState {
     activeTools: new Map(),
     responseText: "",
     thinkingText: "",
+    responseCurrent: false,
   };
 }
 
 /**
- * Live state for every inline activity card. The map is separate from the
- * legacy above-editor widget state so cards remain available after completion.
+ * Live state for every inline activity card. Each card aggregates a run's
+ * tool and streaming activity and remains available after completion.
  */
 export class ActivityCardStore {
   private states = new Map<string, ActivityCardState>();
   private listeners = new Set<ActivityCardListener>();
+  private showCost = false;
 
   subscribe(listener: ActivityCardListener): () => void {
     this.listeners.add(listener);
@@ -103,6 +118,19 @@ export class ActivityCardStore {
 
   get(id: string): ActivityCardState | undefined {
     return this.states.get(id);
+  }
+
+  getForRecord(record: ActivityCardRecord): ActivityCardState | undefined {
+    return this.states.get(activityCardId(record));
+  }
+
+  setShowCost(show: boolean): void {
+    this.showCost = show;
+    this.changed();
+  }
+
+  shouldShowCost(): boolean {
+    return this.showCost;
   }
 
   /** Hydrate a card from its durable invocation entry. */
@@ -118,6 +146,7 @@ export class ActivityCardStore {
     existing.parentAgentId = data.parentAgentId;
     existing.modelName = data.modelName;
     existing.displayName = data.displayName;
+    existing.contextPercent = data.contextPercent;
     existing.tags = data.tags ? [...data.tags] : undefined;
     if (existing.status !== "running" && existing.status !== "completed") {
       existing.status = data.status;
@@ -142,10 +171,12 @@ export class ActivityCardStore {
 
   begin(record: ActivityCardRecord): void {
     const invocation = record.invocation;
-    const current = this.states.get(record.id);
+    const id = activityCardId(record);
+    const current = this.states.get(id);
+    const contextPercent = record.contextPercent ?? this.readContextPercent(record);
     if (!current) {
-      this.states.set(record.id, stateFromData({
-        id: record.id,
+      this.states.set(id, stateFromData({
+        id,
         type: record.type,
         description: record.description,
         startedAt: record.startedAt,
@@ -161,8 +192,11 @@ export class ActivityCardStore {
           ...(invocation.isolation === "worktree" ? ["worktree"] : []),
         ] : undefined,
         parentAgentId: record.parentAgentId,
+        completedAt: record.completedAt,
+        error: record.error,
         compactionCount: record.compactionCount,
         lifetimeUsage: copyUsage(record.lifetimeUsage),
+        ...(contextPercent !== null && contextPercent !== undefined ? { contextPercent } : {}),
       }));
     } else {
       current.status = record.status;
@@ -171,18 +205,20 @@ export class ActivityCardStore {
       current.error = record.error;
       current.toolUses = record.toolUses;
       current.compactionCount = record.compactionCount;
+      current.contextPercent = contextPercent ?? undefined;
     }
     this.changed();
   }
 
   apply(record: ActivityCardRecord, event: AgentActivityEvent): void {
-    const state = this.states.get(record.id);
+    const state = this.states.get(activityCardId(record));
     if (!state) {
       this.begin(record);
       this.apply(record, event);
       return;
     }
-
+    const contextPercent = record.contextPercent ?? this.readContextPercent(record);
+    state.contextPercent = contextPercent ?? undefined;
     switch (event.type) {
       case "tool":
         if (event.activity.type === "start") {
@@ -199,18 +235,25 @@ export class ActivityCardStore {
         break;
       case "text":
         state.responseText = event.fullText;
+        state.responseCurrent = event.fullText.trim().length > 0;
+        if (state.responseCurrent) state.thinkingText = "";
         break;
       case "thinking":
         state.thinkingText = event.fullText;
+        if (event.fullText.trim() && !state.responseCurrent) state.responseText = "";
         break;
       case "turn":
         state.turnCount = event.turnCount;
+        state.responseCurrent = false;
         break;
       case "usage":
         state.lifetimeUsage = copyUsage(record.lifetimeUsage);
         break;
       case "compaction":
         state.compactionCount = record.compactionCount;
+        break;
+      case "context":
+        state.contextPercent = event.percent ?? undefined;
         break;
       case "session":
         break;
@@ -225,7 +268,7 @@ export class ActivityCardStore {
   }
 
   sync(record: ActivityCardRecord): void {
-    const state = this.states.get(record.id);
+    const state = this.states.get(activityCardId(record));
     if (!state) return;
     state.status = record.status;
     state.completedAt = record.completedAt;
@@ -233,11 +276,12 @@ export class ActivityCardStore {
     state.toolUses = record.toolUses;
     state.compactionCount = record.compactionCount;
     state.lifetimeUsage = copyUsage(record.lifetimeUsage);
+    state.contextPercent = record.contextPercent ?? this.readContextPercent(record) ?? undefined;
     this.changed();
   }
 
   finish(record: ActivityCardRecord): void {
-    const state = this.states.get(record.id);
+    const state = this.states.get(activityCardId(record));
     if (!state) {
       this.begin(record);
       this.finish(record);
@@ -249,8 +293,12 @@ export class ActivityCardStore {
     state.toolUses = record.toolUses;
     state.compactionCount = record.compactionCount;
     state.lifetimeUsage = copyUsage(record.lifetimeUsage);
+    state.contextPercent = record.contextPercent ?? this.readContextPercent(record) ?? undefined;
     state.activeTools.clear();
     this.changed();
+  }
+  private readContextPercent(record: ActivityCardRecord): number | null {
+    return getSessionContextPercent(record.session);
   }
 
   clear(): void {
@@ -264,12 +312,6 @@ function compactCount(count: number): string {
   return String(count);
 }
 
-function formatCost(cost: number): string {
-  if (cost === 0) return "$0.0000";
-  if (cost < 1) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
-}
-
 function formatDuration(startedAt: number, completedAt?: number): string {
   const elapsed = Math.max(0, (completedAt ?? Date.now()) - startedAt);
   return `${(elapsed / 1000).toFixed(1)}s`;
@@ -279,11 +321,19 @@ function singleLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function activityText(state: ActivityCardState): string {
-  if (state.activeTools.size > 0) return describeActivity(state.activeTools);
-  if (state.thinkingText.trim()) return `thinking: ${singleLine(state.thinkingText)}`;
-  if (state.responseText.trim()) return singleLine(state.responseText);
-  return "thinking…";
+function activityText(state: ActivityCardState, width: number): string {
+  let activity: string;
+  if (state.activeTools.size > 0) activity = describeActivity(state.activeTools);
+  else if (state.responseText.trim()) activity = singleLine(state.responseText);
+  else if (state.thinkingText.trim()) activity = `thinking: ${singleLine(state.thinkingText)}`;
+  else activity = "thinking…";
+
+  const available = Math.max(1, width - 6);
+  const activityWidth = visibleWidth(activity);
+  if (activityWidth <= available) return activity;
+  if (available === 1) return "…";
+  const tailWidth = available - 1;
+  return `…${sliceByColumn(activity, activityWidth - tailWidth, tailWidth, true)}`;
 }
 
 function statusIcon(state: ActivityCardState, theme: Theme): string {
@@ -307,17 +357,19 @@ function statusLabel(state: ActivityCardState, theme: Theme): string {
   }
 }
 
-function renderCard(state: ActivityCardState, width: number, theme: Theme): string[] {
+function renderCard(state: ActivityCardState, width: number, theme: Theme, showCost: boolean): string[] {
   const usage = state.lifetimeUsage;
   const cache = (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  const cost = showCost ? formatCost(usage.cost ?? 0) : "";
   const steps = state.maxTurns != null ? `steps ${state.turnCount}/${state.maxTurns}` : `steps ${state.turnCount}`;
   const stats = [
     steps,
     `in ${compactCount(usage.input)}`,
     `out ${compactCount(usage.output)}`,
     `cache ${compactCount(cache)}`,
+    ...(state.contextPercent !== undefined ? [`context ${Math.round(state.contextPercent)}%`] : []),
     `tools ${state.toolUses}`,
-    `≈${formatCost(usage.cost ?? 0)}`,
+    ...(cost ? [cost] : []),
     formatDuration(state.startedAt, state.completedAt),
   ].join(" · ");
   const tags = state.tags?.length ? ` ${theme.fg("dim", `[${state.tags.join(", ")}]`)}` : "";
@@ -329,7 +381,7 @@ function renderCard(state: ActivityCardState, width: number, theme: Theme): stri
     `${theme.fg("dim", "╭─")} ${statusIcon(state, theme)} ${theme.bold(name)}${model} ${statusLabel(state, theme)}${tags}`,
     `${theme.fg("dim", "│")}  ${theme.fg("muted", description)}`,
     `${theme.fg("dim", "│")}  ${theme.fg("dim", stats)}`,
-    `${theme.fg("dim", "│")}  ${theme.fg("dim", `⎿  ${activityText(state)}`)}`,
+    `${theme.fg("dim", "│")}  ${theme.fg("dim", `⎿  ${activityText(state, width)}`)}`,
     theme.fg("dim", "╰─"),
   ];
   return lines.map(line => truncateToWidth(line, width));
@@ -344,7 +396,7 @@ class ActivityCardComponent implements Component {
 
   render(width: number): string[] {
     const state = this.store.get(this.id);
-    return state ? renderCard(state, width, this.theme) : [];
+    return state ? renderCard(state, width, this.theme, this.store.shouldShowCost()) : [];
   }
 
   invalidate(): void {}
@@ -361,8 +413,9 @@ export function createActivityCardComponent(
 
 export function toActivityCardData(record: ActivityCardRecord, turnCount = 0): ActivityCardData {
   const invocation = record.invocation;
+  const contextPercent = record.contextPercent ?? getSessionContextPercent(record.session);
   return {
-    id: record.id,
+    id: activityCardId(record),
     type: record.type,
     description: record.description,
     startedAt: record.startedAt,
@@ -382,16 +435,18 @@ export function toActivityCardData(record: ActivityCardRecord, turnCount = 0): A
     error: record.error,
     compactionCount: record.compactionCount,
     lifetimeUsage: copyUsage(record.lifetimeUsage),
+    ...(contextPercent !== null && contextPercent !== undefined ? { contextPercent } : {}),
   };
 }
 
 export function activityCardSnapshot(record: ActivityCardRecord, store: ActivityCardStore): ActivityCardData {
-  const state = store.get(record.id);
+  const state = store.get(activityCardId(record));
   const data = toActivityCardData(record, state?.turnCount ?? 0);
   return {
     ...data,
     toolUses: state?.toolUses ?? data.toolUses,
     turnCount: state?.turnCount ?? data.turnCount,
+    ...(state?.contextPercent !== undefined ? { contextPercent: state.contextPercent } : {}),
   };
 }
 

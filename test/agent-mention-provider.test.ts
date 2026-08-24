@@ -570,7 +570,7 @@ describe("named agents and evicted ones", () => {
   });
 });
 
-// FleetView, the widget, the tool header and the conversation viewer all render
+// Activity cards, FleetView, the tool header and the conversation viewer all render
 // `display_name` (via getConfig). The popup rendering the raw type instead would
 // make `@` the one surface that calls the same agent something else.
 describe("rows carry the display name, not the raw type", () => {

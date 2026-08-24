@@ -144,14 +144,6 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
-  it("round-trips widgetMode; keeps valid values, drops invalid", () => {
-    saveSettings({ widgetMode: "off" }, projectDir);
-    expect(loadSettings(projectDir)).toEqual({ widgetMode: "off" });
-    saveSettings({ widgetMode: "background" }, projectDir);
-    expect(loadSettings(projectDir)).toEqual({ widgetMode: "background" });
-    writeProject({ widgetMode: "sideways" } as any);
-    expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
-  });
 
   it("round-trips outputTranscript; drops non-boolean", () => {
     saveSettings({ outputTranscript: false }, projectDir);
@@ -502,7 +494,6 @@ describe("settings persistence", () => {
         setFleetView: vi.fn(),
         setAgentMentions: vi.fn(),
         setRememberAgents: vi.fn(),
-        setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
@@ -566,7 +557,6 @@ describe("settings persistence", () => {
           disableDefaultAgents: true,
           toolDescriptionMode: "compact",
           fleetView: false,
-          widgetMode: "off",
         },
         appliers,
       );
@@ -580,7 +570,6 @@ describe("settings persistence", () => {
       expect(appliers.setDisableDefaultAgents).toHaveBeenCalledWith(true);
       expect(appliers.setToolDescriptionMode).toHaveBeenCalledWith("compact");
       expect(appliers.setFleetView).toHaveBeenCalledWith(false);
-      expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
     });
 
     it("applies strictAgentFiles; skips it when absent", () => {
@@ -590,12 +579,6 @@ describe("settings persistence", () => {
       expect(appliers.setStrictAgentFiles).toHaveBeenCalledTimes(1);
     });
 
-    it("applies widgetMode; skips it when absent", () => {
-      applySettings({ widgetMode: "off" }, appliers);
-      expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
-      applySettings({}, appliers);
-      expect(appliers.setWidgetMode).toHaveBeenCalledTimes(1); // absence is "use default"
-    });
 
     it("applies fleetView (true and false); skips it when absent", () => {
       applySettings({ fleetView: true }, appliers);
@@ -722,7 +705,6 @@ describe("settings persistence", () => {
         setFleetView: vi.fn(),
         setAgentMentions: vi.fn(),
         setRememberAgents: vi.fn(),
-        setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
