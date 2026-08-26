@@ -20,6 +20,7 @@ import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, loca
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
+import { suppressAssistantThinkingRows } from "./assistant-thinking-suppression.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
@@ -280,6 +281,7 @@ export default function (pi: ExtensionAPI) {
   const activityCards = new ActivityCardStore();
   const activityTicker = new ActivityCardTicker();
   let restoreToolExecutionRows: (() => void) | undefined;
+  let restoreAssistantThinkingRows: (() => void) | undefined;
   if (typeof pi.registerEntryRenderer === "function") {
     pi.registerEntryRenderer<ActivityCardData>(ACTIVITY_ENTRY, (entry, _options, theme) => {
       const data = entry.data;
@@ -1150,6 +1152,8 @@ export default function (pi: ExtensionAPI) {
     mainSessionActive = true;
     restoreToolExecutionRows?.();
     restoreToolExecutionRows = ctx.mode === "tui" ? suppressToolExecutionRows() : undefined;
+    restoreAssistantThinkingRows?.();
+    restoreAssistantThinkingRows = ctx.mode === "tui" ? suppressAssistantThinkingRows() : undefined;
     suppressMainToolOutput(ctx);
     currentCtx = ctx;
     if (ctx.hasUI) {
@@ -1567,6 +1571,8 @@ export default function (pi: ExtensionAPI) {
     currentCtx = undefined;
     restoreToolExecutionRows?.();
     restoreToolExecutionRows = undefined;
+    restoreAssistantThinkingRows?.();
+    restoreAssistantThinkingRows = undefined;
     restoreMainToolOutput();
     clearPendingCompletionDelivery();
     clearMainCardAppendTimer();
@@ -1613,6 +1619,8 @@ export default function (pi: ExtensionAPI) {
     clearPendingCompletionDelivery();
     restoreToolExecutionRows?.();
     restoreToolExecutionRows = undefined;
+    restoreAssistantThinkingRows?.();
+    restoreAssistantThinkingRows = undefined;
     restoreMainToolOutput();
     activityTicker.dispose();
     clearMainCardAppendTimer();

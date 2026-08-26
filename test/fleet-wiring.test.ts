@@ -12,7 +12,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -25,11 +25,23 @@ import subagentsExtension from "../src/index.js";
 
 const BUILTIN_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
 const TOOL_ROW_PATCH_STATE_KEY = Symbol.for("pi-subagents:tool-row-suppression");
+const ASSISTANT_THINKING_PATCH_STATE_KEY = Symbol.for("pi-subagents:assistant-thinking-suppression");
 const originalToolRowRender = ToolExecutionComponent.prototype.render;
+const originalAssistantUpdateContent = AssistantMessageComponent.prototype.updateContent;
 
 function restoreToolRowPatchState(): void {
   ToolExecutionComponent.prototype.render = originalToolRowRender;
   delete (globalThis as any)[TOOL_ROW_PATCH_STATE_KEY];
+}
+
+function restoreAssistantThinkingPatchState(): void {
+  AssistantMessageComponent.prototype.updateContent = originalAssistantUpdateContent;
+  delete (globalThis as any)[ASSISTANT_THINKING_PATCH_STATE_KEY];
+}
+
+function restorePatchState(): void {
+  restoreToolRowPatchState();
+  restoreAssistantThinkingPatchState();
 }
 
 function makePi() {
@@ -71,11 +83,11 @@ function uiCtx() {
   };
 }
 
-function ctxWith(ui: ReturnType<typeof uiCtx>) {
+function ctxWith(ui: ReturnType<typeof uiCtx>, mode = "tui") {
   return {
     hasUI: true,
     ui,
-    mode: "tui",
+    mode,
     cwd: process.cwd(),
     model: undefined,
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
@@ -118,7 +130,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
-    restoreToolRowPatchState();
+    restorePatchState();
     tmpDir = mkdtempSync(join(tmpdir(), "pi-fleet-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-fleet-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -134,7 +146,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
   });
 
   afterEach(() => {
-    restoreToolRowPatchState();
+    restorePatchState();
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
@@ -226,6 +238,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     }, ctx);
     await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     await lifecycle.get("agent_settled")?.({}, ctx);
+    expect(AssistantMessageComponent.prototype.updateContent).not.toBe(originalAssistantUpdateContent);
 
     const entries = vi.mocked(pi.appendEntry).mock.calls;
     expect(entries[0]?.[0]).toBe("subagents:activity");
@@ -517,6 +530,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     try {
       await lifecycle.get("session_start")?.({}, ctx);
       expect(ToolExecutionComponent.prototype.render).not.toBe(originalToolRowRender);
+      expect(AssistantMessageComponent.prototype.updateContent).not.toBe(originalAssistantUpdateContent);
       for (const name of ["bash", "web_search"]) {
         const row = { toolName: name } as unknown as ToolExecutionComponent;
         expect(ToolExecutionComponent.prototype.render.call(row, 80)).toEqual([]);
@@ -526,7 +540,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       await lifecycle.get("session_shutdown")?.({}, ctx);
     }
   });
-  it.each(["session_before_switch", "session_shutdown"] as const)("%s restores the original tool-row renderer", async event => {
+  it.each(["session_before_switch", "session_shutdown"] as const)("%s restores the original row renderers", async event => {
     const { pi, lifecycle } = makePi();
     subagentsExtension(pi);
     const ctx = ctxWith(uiCtx());
@@ -535,13 +549,28 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     try {
       await lifecycle.get("session_start")?.({}, ctx);
       expect(ToolExecutionComponent.prototype.render).not.toBe(originalToolRowRender);
+      expect(AssistantMessageComponent.prototype.updateContent).not.toBe(originalAssistantUpdateContent);
       await lifecycle.get(event)?.({}, ctx);
       shutdown = event === "session_shutdown";
       expect(ToolExecutionComponent.prototype.render).toBe(originalToolRowRender);
+      expect(AssistantMessageComponent.prototype.updateContent).toBe(originalAssistantUpdateContent);
     } finally {
       if (!shutdown) await lifecycle.get("session_shutdown")?.({}, ctx);
     }
   });
+  it("does not patch host row renderers for non-TUI sessions", async () => {
+    const { pi, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = ctxWith(uiCtx(), "print");
+    try {
+      await lifecycle.get("session_start")?.({}, ctx);
+      expect(ToolExecutionComponent.prototype.render).toBe(originalToolRowRender);
+      expect(AssistantMessageComponent.prototype.updateContent).toBe(originalAssistantUpdateContent);
+    } finally {
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+
   it("appends a card for a continuation without a new user message", async () => {
     const { pi, lifecycle } = makePi();
     subagentsExtension(pi);
