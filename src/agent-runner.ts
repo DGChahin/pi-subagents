@@ -11,7 +11,9 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
+  createEventBus,
   DefaultResourceLoader,
+  type EventBus,
   type ExtensionAPI,
   getAgentDir,
   SessionManager,
@@ -43,6 +45,225 @@ export const SUBAGENT_TOOL_NAMES = {
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
+
+const CONTEXT_COMPACT_ATTEMPT_START_EVENT = "context-compact:attempt-start";
+const CONTEXT_COMPACT_ATTEMPT_PENDING_EVENT = "context-compact:attempt-pending";
+const CONTEXT_COMPACT_BARRIER_OPEN_EVENT = "context-compact:barrier-open";
+const sessionEventBuses = new WeakMap<AgentSession, EventBus>();
+
+interface ContextCompactBarrierIdentity {
+  readonly barrierId: number;
+  readonly sessionId: string;
+  readonly generation: number;
+}
+
+interface ContextCompactAttemptStart extends ContextCompactBarrierIdentity {
+  readonly attemptId: number;
+}
+
+type ContextCompactAttemptPending = ContextCompactBarrierIdentity;
+
+type ContextCompactBarrierOutcome = "compacted" | "failed" | "invalidated";
+
+interface ContextCompactBarrierOpen extends ContextCompactBarrierIdentity {
+  readonly outcome: ContextCompactBarrierOutcome;
+}
+
+type ManagedPromptOutcome = "none" | "compacted" | "failed" | "invalidated" | "aborted";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseContextCompactAttemptStart(value: unknown): ContextCompactAttemptStart | undefined {
+  if (!isRecord(value)) return undefined;
+  const { attemptId, barrierId, sessionId, generation } = value;
+  if (
+    typeof attemptId !== "number" || !Number.isInteger(attemptId)
+    || typeof barrierId !== "number" || !Number.isInteger(barrierId)
+    || typeof sessionId !== "string" || sessionId.length === 0
+    || typeof generation !== "number" || !Number.isInteger(generation)
+  ) return undefined;
+  return { attemptId, barrierId, sessionId, generation };
+}
+
+function parseContextCompactBarrierOpen(value: unknown): ContextCompactBarrierOpen | undefined {
+  if (!isRecord(value)) return undefined;
+  const { barrierId, sessionId, generation, outcome } = value;
+  if (
+    typeof barrierId !== "number" || !Number.isInteger(barrierId)
+    || typeof sessionId !== "string" || sessionId.length === 0
+    || typeof generation !== "number" || !Number.isInteger(generation)
+    || (outcome !== "compacted" && outcome !== "failed" && outcome !== "invalidated")
+  ) return undefined;
+  return { barrierId, sessionId, generation, outcome };
+}
+
+function parseContextCompactAttemptPending(value: unknown): ContextCompactAttemptPending | undefined {
+  if (!isRecord(value)) return undefined;
+  const { barrierId, sessionId, generation } = value;
+  if (
+    typeof barrierId !== "number" || !Number.isInteger(barrierId)
+    || typeof sessionId !== "string" || sessionId.length === 0
+    || typeof generation !== "number" || !Number.isInteger(generation)
+  ) return undefined;
+  return { barrierId, sessionId, generation };
+}
+
+function sameContextCompactBarrier(
+  left: ContextCompactBarrierIdentity,
+  right: ContextCompactBarrierIdentity,
+ ): boolean {
+  return left.barrierId === right.barrierId
+    && left.sessionId === right.sessionId
+    && left.generation === right.generation;
+}
+
+async function promptWithCompactionLifecycle(
+  session: AgentSession,
+  eventBus: EventBus,
+  text: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const sessionId = session.sessionId;
+  let attempt: ContextCompactAttemptStart | undefined;
+  let pending: ContextCompactAttemptPending | undefined;
+  let rejectedPending: ContextCompactBarrierIdentity | undefined;
+  let barrier: ContextCompactBarrierOpen | undefined;
+  let waitingForContinuationStart = false;
+  let completionResolved = false;
+  let lateAttemptCheck: ReturnType<typeof setImmediate> | undefined;
+  let promptSettled = false;
+  let resolveCompletion!: (outcome: ManagedPromptOutcome) => void;
+  const completion = new Promise<ManagedPromptOutcome>((resolve) => {
+    resolveCompletion = resolve;
+  });
+  const finish = (outcome: ManagedPromptOutcome): void => {
+    if (completionResolved) return;
+    completionResolved = true;
+    if (lateAttemptCheck !== undefined) {
+      clearImmediate(lateAttemptCheck);
+      lateAttemptCheck = undefined;
+    }
+    resolveCompletion(outcome);
+  };
+  const onPending = (value: unknown): void => {
+    const next = parseContextCompactAttemptPending(value);
+    if (!next || next.sessionId !== sessionId) return;
+    if (attempt && sameContextCompactBarrier(attempt, next)) return;
+    if (pending && sameContextCompactBarrier(pending, next)) return;
+    if (rejectedPending && sameContextCompactBarrier(rejectedPending, next)) return;
+    pending = next;
+    attempt = undefined;
+    rejectedPending = undefined;
+    barrier = undefined;
+    waitingForContinuationStart = false;
+  };
+  const onAttemptStart = (value: unknown): void => {
+    const next = parseContextCompactAttemptStart(value);
+    if (!next || next.sessionId !== sessionId) return;
+    if (rejectedPending && sameContextCompactBarrier(rejectedPending, next)) return;
+    if (pending && !sameContextCompactBarrier(pending, next)) return;
+    attempt = next;
+    pending = undefined;
+    rejectedPending = undefined;
+    barrier = undefined;
+    waitingForContinuationStart = false;
+  };
+  const onBarrierOpen = (value: unknown): void => {
+    const next = parseContextCompactBarrierOpen(value);
+    if (!next || next.sessionId !== sessionId) return;
+    if (pending && !sameContextCompactBarrier(pending, next)) return;
+    if (attempt && sameContextCompactBarrier(attempt, next)) {
+      pending = undefined;
+      rejectedPending = undefined;
+      barrier = next;
+    } else if (pending && sameContextCompactBarrier(pending, next)) {
+      pending = undefined;
+      rejectedPending = next;
+      barrier = undefined;
+      waitingForContinuationStart = false;
+      if (next.outcome !== "compacted" || promptSettled) {
+        finish(next.outcome === "compacted" ? "none" : next.outcome);
+      }
+      return;
+    } else {
+      return;
+    }
+    if (next.outcome !== "compacted") {
+      finish(next.outcome);
+      return;
+    }
+    waitingForContinuationStart = !session.isStreaming;
+    if (waitingForContinuationStart) {
+      queueMicrotask(() => {
+        if (
+          !completionResolved
+          && barrier === next
+          && waitingForContinuationStart
+          && !session.isStreaming
+          && session.pendingMessageCount === 0
+        ) finish("failed");
+      });
+    }
+  };
+  const onSessionEvent = (event: AgentSessionEvent): void => {
+    if (event.type === "agent_start" && waitingForContinuationStart) {
+      waitingForContinuationStart = false;
+      return;
+    }
+    if (
+      event.type === "agent_settled"
+      && barrier?.outcome === "compacted"
+      && pending === undefined
+      && !waitingForContinuationStart
+    ) finish("compacted");
+  };
+  const unsubscribeSession = session.subscribe(onSessionEvent);
+  const unsubscribePending = eventBus.on(
+    CONTEXT_COMPACT_ATTEMPT_PENDING_EVENT,
+    onPending,
+  );
+  const unsubscribeEvents = eventBus.on(
+    CONTEXT_COMPACT_ATTEMPT_START_EVENT,
+    onAttemptStart,
+  );
+  const unsubscribeBarrier = eventBus.on(
+    CONTEXT_COMPACT_BARRIER_OPEN_EVENT,
+    onBarrierOpen,
+  );
+  let promptError: unknown;
+  let promptFailed = false;
+  const onAbort = (): void => finish("aborted");
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  }
+  try {
+    try {
+      await session.prompt(text);
+    } catch (error) {
+      promptFailed = true;
+      promptError = error;
+    }
+    promptSettled = true;
+    if (!attempt && !pending) {
+      lateAttemptCheck = setImmediate(() => {
+        lateAttemptCheck = undefined;
+        if (!attempt && !pending) finish("none");
+      });
+    }
+    const outcome = await completion;
+    if (promptFailed && outcome !== "compacted") throw promptError;
+  } finally {
+    if (lateAttemptCheck !== undefined) clearImmediate(lateAttemptCheck);
+    signal?.removeEventListener("abort", onAbort);
+    unsubscribeBarrier();
+    unsubscribeEvents();
+    unsubscribePending();
+    unsubscribeSession();
+  }
+}
 
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
@@ -523,18 +744,31 @@ export interface RunResult {
  */
 function collectResponseText(session: AgentSession) {
   let text = "";
+  let failure: string | undefined;
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     // message_start also fires for user and toolResult messages — resetting on
     // those would wipe assistant text already collected. Reset only when a new
     // ASSISTANT message begins, so getText() is the last assistant message's text.
     if (event.type === "message_start" && event.message.role === "assistant") {
       text = "";
+      failure = undefined;
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       text += event.assistantMessageEvent.delta;
     }
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      const messageContent = Array.isArray(event.message.content) ? event.message.content : [];
+      if (!text) text = extractText(messageContent);
+      if (event.message.stopReason === "error") {
+        failure = event.message.errorMessage?.trim() || "provider error with no output";
+      } else if (event.message.stopReason === "length" && !extractText(messageContent).trim()) {
+        failure = "run hit the output token limit before producing any text";
+      } else {
+        failure = undefined;
+      }
+    }
   });
-  return { getText: () => text, unsubscribe };
+  return { getText: () => text, getFailure: () => failure, unsubscribe };
 }
 
 /**
@@ -737,6 +971,7 @@ export async function runAgent(
           };
         };
 
+  const childEventBus = createEventBus();
   const loader = new DefaultResourceLoader({
     cwd: configCwd,
     agentDir,
@@ -747,6 +982,7 @@ export async function runAgent(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    eventBus: childEventBus,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
   });
@@ -969,6 +1205,7 @@ export async function runAgent(
   }
 
   const { session } = await runInChildSessionContext(() => createAgentSession(sessionOpts));
+  sessionEventBuses.set(session, childEventBus);
 
   const baseSessionName = agentConfig?.name ?? type;
   session.setSessionName(
@@ -1067,7 +1304,7 @@ export async function runAgent(
   // on counts as this run's output (a fresh session, so usually 0).
   const startLen = session.messages.length;
   try {
-    await session.prompt(effectivePrompt);
+    await promptWithCompactionLifecycle(session, childEventBus, effectivePrompt, options.signal);
   } finally {
     unsubTurns();
     collector.unsubscribe();
@@ -1080,7 +1317,7 @@ export async function runAgent(
     session,
     aborted: turnLimit.wasAborted(),
     steered: turnLimit.wasSteered(),
-    failure: finalTurnError(session, startLen),
+    failure: collector.getFailure() ?? finalTurnError(session, startLen),
   };
 }
 
@@ -1143,7 +1380,12 @@ export async function resumeAgent(
   });
 
   try {
-    await session.prompt(prompt);
+    const eventBus = sessionEventBuses.get(session);
+    if (eventBus) {
+      await promptWithCompactionLifecycle(session, eventBus, prompt, options.signal);
+    } else {
+      await session.prompt(prompt);
+    }
   } finally {
     collector.unsubscribe();
     unsubEvents();
@@ -1152,7 +1394,7 @@ export async function resumeAgent(
 
   return {
     text: collector.getText().trim() || getLastAssistantText(session, startLen),
-    failure: finalTurnError(session, startLen),
+    failure: collector.getFailure() ?? finalTurnError(session, startLen),
     aborted: turnLimit.wasAborted(),
     steered: turnLimit.wasSteered(),
   };

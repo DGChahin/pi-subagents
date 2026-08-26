@@ -803,7 +803,11 @@ export class AgentManager {
   }
 
   private canResume(record: AgentRecord): boolean {
-    return record.status !== "running"
+    const session = record.session;
+    return session !== undefined
+      && !session.isStreaming
+      && !session.isCompacting
+      && record.status !== "running"
       && record.status !== "queued"
       && record.settledRevision === record.runRevision
       && record.resultConsumed === true

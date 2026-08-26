@@ -1722,6 +1722,34 @@ describe("AgentManager — background resume", () => {
     return id;
   }
 
+  it.each(["isStreaming", "isCompacting"] as const)(
+    "refuses to resume when the retained session is %s",
+    async state => {
+      const retainedSession = { ...mockSession(), [state]: true };
+      vi.mocked(runAgent).mockResolvedValue({
+        responseText: "first",
+        session: retainedSession,
+        aborted: false,
+        steered: false,
+      });
+      manager = new AgentManager();
+      const id = manager.spawn(mockPi, mockCtx, "general-purpose", "task", {
+        description: "task",
+        isBackground: true,
+      });
+      const record = manager.getRecord(id)!;
+      await record.promise;
+      record.resultConsumed = true;
+      vi.mocked(resumeAgent).mockClear();
+
+      expect(await manager.resume(id, "later", undefined, { isBackground: true })).toBeUndefined();
+      expect(resumeAgent).not.toHaveBeenCalled();
+      expect(record.runRevision).toBe(1);
+      expect(record.status).toBe("completed");
+      expect(manager.steer(id, "not while retained session is busy")).toBe(false);
+    },
+  );
+
   it("returns immediately with a running record + promise, then settles and fires onComplete", async () => {
     const onComplete = vi.fn();
     manager = new AgentManager(onComplete);
