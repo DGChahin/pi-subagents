@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   createAgentSession,
+  createEventBus,
+  childEventBuses,
   defaultResourceLoaderCtor,
   loaderExtensionsRef,
   getAgentDir,
@@ -13,26 +15,52 @@ const {
   sessionManagerOpen,
   settingsManagerCreate,
   settingsManagerGetSessionDir,
-} = vi.hoisted(() => ({
-  createAgentSession: vi.fn(),
-  defaultResourceLoaderCtor: vi.fn(),
-  loaderExtensionsRef: {
-    current: { extensions: [], errors: [], runtime: {} } as {
-      extensions: Array<{ path: string; tools: Map<string, unknown> }>;
-      errors: Array<{ path: string; error: string }>;
-      runtime: Record<string, unknown>;
+} = vi.hoisted(() => {
+  type MockEventBus = {
+    on: (event: string, listener: (payload: unknown) => void) => () => boolean;
+    emit: (event: string, payload: unknown) => void;
+  };
+  const childEventBuses: MockEventBus[] = [];
+  const createEventBus = vi.fn(() => {
+    const listeners = new Map<string, Set<(payload: unknown) => void>>();
+    const eventBus: MockEventBus = {
+      on: vi.fn((event: string, listener: (payload: unknown) => void) => {
+        const eventListeners = listeners.get(event) ?? new Set<(payload: unknown) => void>();
+        eventListeners.add(listener);
+        listeners.set(event, eventListeners);
+        return () => eventListeners.delete(listener);
+      }),
+      emit: vi.fn((event: string, payload: unknown) => {
+        for (const listener of listeners.get(event) ?? []) listener(payload);
+      }),
+    };
+    childEventBuses.push(eventBus);
+    return eventBus;
+  });
+  return {
+    createAgentSession: vi.fn(),
+    createEventBus,
+    childEventBuses,
+    defaultResourceLoaderCtor: vi.fn(),
+    loaderExtensionsRef: {
+      current: { extensions: [], errors: [], runtime: {} } as {
+        extensions: Array<{ path: string; tools: Map<string, unknown> }>;
+        errors: Array<{ path: string; error: string }>;
+        runtime: Record<string, unknown>;
+      },
     },
-  },
-  getAgentDir: vi.fn(() => "/mock/agent-dir"),
-  sessionManagerInMemory: vi.fn(() => ({ kind: "memory-session-manager" })),
-  sessionManagerCreate: vi.fn(() => ({ kind: "persistent-session-manager" })),
-  sessionManagerOpen: vi.fn(() => ({ kind: "reopened-session-manager" })),
-  settingsManagerGetSessionDir: vi.fn(() => undefined as string | undefined),
-  settingsManagerCreate: vi.fn(() => ({ kind: "settings-manager", getSessionDir: settingsManagerGetSessionDir })),
-}));
+    getAgentDir: vi.fn(() => "/mock/agent-dir"),
+    sessionManagerInMemory: vi.fn(() => ({ kind: "memory-session-manager" })),
+    sessionManagerCreate: vi.fn(() => ({ kind: "persistent-session-manager" })),
+    sessionManagerOpen: vi.fn(() => ({ kind: "reopened-session-manager" })),
+    settingsManagerGetSessionDir: vi.fn(() => undefined as string | undefined),
+    settingsManagerCreate: vi.fn(() => ({ kind: "settings-manager", getSessionDir: settingsManagerGetSessionDir })),
+  };
+});
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession,
+  createEventBus,
   // Mock loader simulates pi-mono: reload() applies additionalExtensionPaths
   // (an unknown path becomes an error row, mirroring a failed load) and then
   // runs extensionsOverride over the result.
@@ -148,7 +176,10 @@ function createSession(finalText: string) {
     messages: [] as any[],
     subscribe: vi.fn((listener: (event: any) => void) => {
       listeners.push(listener);
-      return () => {};
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      };
     }),
     prompt: vi.fn(async () => {
       session.messages.push({
@@ -193,10 +224,25 @@ const ctx = {
   },
 } as any;
 
-const pi = {} as any;
+const piEventListeners = new Map<string, Set<(payload: unknown) => void>>();
+const pi = {
+  events: {
+    on: vi.fn((event: string, listener: (payload: unknown) => void) => {
+      const listeners = piEventListeners.get(event) ?? new Set<(payload: unknown) => void>();
+      listeners.add(listener);
+      piEventListeners.set(event, listeners);
+      return () => listeners.delete(listener);
+    }),
+    emit: vi.fn((event: string, payload: unknown) => {
+      for (const listener of piEventListeners.get(event) ?? []) listener(payload);
+    }),
+  },
+} as any;
 
 beforeEach(() => {
   createAgentSession.mockReset();
+  createEventBus.mockClear();
+  childEventBuses.length = 0;
   defaultResourceLoaderCtor.mockClear();
   getAgentDir.mockClear();
   sessionManagerInMemory.mockClear();
@@ -210,6 +256,7 @@ beforeEach(() => {
   settingsManagerCreate.mockClear();
   vi.mocked(createNestedSubagentTools).mockClear();
   loaderExtensionsRef.current = { extensions: [], errors: [], runtime: {} };
+  piEventListeners.clear();
   lastSession = undefined;
 });
 
@@ -509,6 +556,435 @@ describe("agent-runner failed-final-turn detection (#144)", () => {
     const result = await runAgent(ctx, "Explore", "go", { pi });
 
     expect(result.responseText).toBe("STREAMED");
+  });
+});
+
+// Context compaction owns the provider abort and resumes the same prompt. The
+// runner must stay attached until the continuation settles, while failed or
+// unrelated barriers must leave the original abort terminal.
+describe("agent-runner context-compaction lifecycle", () => {
+  function lifecycleSession() {
+    const { session, listeners } = createSession("");
+    type LifecycleSession = ReturnType<typeof createSession>["session"] & {
+      sessionId: string;
+      isStreaming: boolean;
+      isCompacting: boolean;
+      pendingMessageCount: number;
+    };
+    const lifecycle = session as LifecycleSession;
+    Object.assign(lifecycle, {
+      sessionId: "child-session",
+      isStreaming: false,
+      isCompacting: false,
+      pendingMessageCount: 0,
+    });
+    const emitSession = (event: any) => {
+      for (const listener of [...listeners]) listener(event);
+    };
+    return { session: lifecycle, emitSession };
+  }
+  const nextMacrotask = () => new Promise<void>(resolve => setImmediate(resolve));
+  const attempt = (barrierId: number) => ({
+    attemptId: barrierId,
+    barrierId,
+    sessionId: "child-session",
+    generation: 1,
+  });
+  const pendingAttempt = (barrierId: number) => ({
+    barrierId,
+    sessionId: "child-session",
+    generation: 1,
+  });
+  const compactedBarrier = (barrierId: number) => ({
+    barrierId,
+    sessionId: "child-session",
+    generation: 1,
+    outcome: "compacted",
+  });
+  const emitFinalAssistant = (
+    emitSession: (event: any) => void,
+    session: { messages: any[] },
+  ) => {
+    emitSession({ type: "message_start", message: { role: "assistant" } });
+    emitSession({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "FINAL CONTINUATION" },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "FINAL CONTINUATION" }],
+      stopReason: "stop",
+    };
+    emitSession({ type: "message_end", message });
+    session.messages.push(message);
+  };
+  function latestChildEventBus() {
+    const eventBus = childEventBuses[childEventBuses.length - 1];
+    if (!eventBus) throw new Error("runAgent did not create a child event bus");
+    return eventBus;
+  }
+  async function retainSession(session: ReturnType<typeof createSession>["session"]) {
+    createAgentSession.mockResolvedValue({ session });
+    await runAgent(ctx, "Explore", "retain", { pi });
+    const eventBus = latestChildEventBus();
+    expect(lastLoaderOpts().eventBus).toBe(eventBus);
+    expect(eventBus).not.toBe(pi.events);
+    return eventBus;
+  }
+
+  it("keeps the manager-facing run pending when attempt-start follows pending on a later macrotask", async () => {
+    const { session, emitSession } = lifecycleSession();
+    const abortError = new Error("This operation was aborted");
+    session.prompt = vi.fn(async () => {
+      latestChildEventBus().emit("context-compact:attempt-pending", pendingAttempt(5));
+      throw abortError;
+    }) as any;
+    createAgentSession.mockResolvedValue({ session });
+
+    let settled = false;
+    const invocation = runAgent(ctx, "Explore", "pending handshake", { pi });
+    const pending = invocation.then(result => {
+      settled = true;
+      return result;
+    });
+
+    await nextMacrotask();
+    const eventBus = latestChildEventBus();
+    expect(settled).toBe(false);
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      "context-compact:attempt-pending",
+      pendingAttempt(5),
+    );
+
+    eventBus.emit("context-compact:attempt-start", attempt(5));
+    session.isStreaming = false;
+    eventBus.emit("context-compact:barrier-open", compactedBarrier(5));
+    session.isStreaming = true;
+    emitSession({ type: "agent_start" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    session.isStreaming = false;
+    emitFinalAssistant(emitSession, session);
+    emitSession({ type: "agent_settled" });
+    const result = await pending;
+
+    expect(result.responseText).toBe("FINAL CONTINUATION");
+    expect(result.failure).toBeUndefined();
+  });
+
+  it.each(["failed", "invalidated"] as const)(
+    "settles a pending-only %s barrier instead of waiting for an attempt-start",
+    async outcome => {
+      const { session } = lifecycleSession();
+      const eventBus = await retainSession(session);
+      const pendingEvent = pendingAttempt(6);
+      const abortError = new Error("This operation was aborted");
+      session.prompt = vi.fn(async () => {
+        eventBus.emit("context-compact:attempt-pending", pendingEvent);
+        throw abortError;
+      }) as any;
+
+      let settled = false;
+      const invocation = resumeAgent(session as any, "pending-only", { pi });
+      const observed = invocation.then(
+        result => {
+          settled = true;
+          return result;
+        },
+        error => {
+          settled = true;
+          throw error;
+        },
+      );
+      await nextMacrotask();
+      expect(settled).toBe(false);
+      eventBus.emit("context-compact:barrier-open", { ...pendingEvent, outcome });
+
+      await expect(observed).rejects.toThrow("This operation was aborted");
+      expect(session.prompt).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not attach unrelated or mismatched pending handshakes", async () => {
+    const { session } = lifecycleSession();
+    const eventBus = await retainSession(session);
+    const unrelatedChildBus = createEventBus();
+    const abortError = new Error("This operation was aborted");
+    session.prompt = vi.fn(async () => {
+      const pending = pendingAttempt(7);
+      // Neither the parent bus nor another child bus belongs to this run.
+      pi.events.emit("context-compact:attempt-pending", pending);
+      unrelatedChildBus.emit("context-compact:attempt-pending", pending);
+      // The private bus still rejects a different session identity.
+      eventBus.emit("context-compact:attempt-pending", {
+        ...pending,
+        sessionId: "other-session",
+      });
+      eventBus.emit("context-compact:attempt-pending", {
+        ...pending,
+        generation: "not-an-integer",
+      });
+      throw abortError;
+    }) as any;
+
+    await expect(resumeAgent(session as any, "unrelated pending", { pi }))
+      .rejects.toThrow("This operation was aborted");
+    expect(session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it("returns resume text from message_end after compaction replaces history below startLen", async () => {
+    const { session, emitSession } = lifecycleSession();
+    const eventBus = await retainSession(session);
+    session.messages = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: [{ type: "text", text: "previous answer" }] },
+      { role: "toolResult", content: [] },
+    ];
+    const startLen = session.messages.length;
+    const abortError = new Error("This operation was aborted");
+    session.prompt = vi.fn(async () => {
+      eventBus.emit("context-compact:attempt-pending", pendingAttempt(8));
+      throw abortError;
+    }) as any;
+
+    const seenDeltas: string[] = [];
+    const invocation = resumeAgent(session as any, "continue after compaction", {
+      pi,
+      onTextDelta: delta => seenDeltas.push(delta),
+    });
+    let settled = false;
+    const pending = invocation.then(result => {
+      settled = true;
+      return result;
+    });
+
+    await nextMacrotask();
+    expect(settled).toBe(false);
+    eventBus.emit("context-compact:attempt-start", attempt(8));
+    session.isStreaming = false;
+    eventBus.emit("context-compact:barrier-open", compactedBarrier(8));
+    session.isStreaming = true;
+    emitSession({ type: "agent_start" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    // Compaction replaces the history, so the final message is below the
+    // pre-resume start boundary used by the history fallback.
+    session.messages = [{ role: "user", content: "compacted context" }];
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "FINAL WITHOUT DELTA" }],
+      stopReason: "stop",
+    };
+    emitSession({ type: "message_start", message: { role: "assistant" } });
+    emitSession({ type: "message_end", message: finalMessage });
+    session.messages.push(finalMessage);
+    session.isStreaming = false;
+    emitSession({ type: "agent_settled" });
+
+    const result = await pending;
+    expect(session.messages.length).toBeLessThan(startLen);
+    expect(seenDeltas).toEqual([]);
+    expect(result.text).toBe("FINAL WITHOUT DELTA");
+    expect(result.failure).toBeUndefined();
+  });
+
+  it.each(["initial", "resumed"] as const)(
+    "keeps the %s run pending through an owned abort and repeated compaction",
+    async mode => {
+      const { session, emitSession } = lifecycleSession();
+      const seenFullText: string[] = [];
+      const abortError = new Error("This operation was aborted");
+      let promptCall = 0;
+      let retainedBus: ReturnType<typeof latestChildEventBus> | undefined;
+      session.prompt = vi.fn(async () => {
+        if (mode === "resumed" && promptCall++ === 0) {
+          session.messages.push({
+            role: "assistant",
+            content: [{ type: "text", text: "INITIAL" }],
+            stopReason: "stop",
+          });
+          return;
+        }
+        promptCall++;
+        session.isStreaming = true;
+        emitSession({ type: "message_start", message: { role: "assistant" } });
+        const message = {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: abortError.message,
+        };
+        emitSession({ type: "message_end", message });
+        session.messages.push(message);
+        session.isStreaming = false;
+        // The real child extension emits the attempt on the loader's child bus.
+        latestChildEventBus().emit("context-compact:attempt-start", attempt(10));
+        // A matching parent-bus barrier must not claim this child run.
+        pi.events.emit("context-compact:attempt-start", attempt(10));
+        pi.events.emit("context-compact:barrier-open", compactedBarrier(10));
+        throw abortError;
+      }) as any;
+      createAgentSession.mockResolvedValue({ session });
+      if (mode === "resumed") {
+        const initial = await runAgent(ctx, "Explore", "initial", { pi });
+        expect(initial.responseText).toBe("INITIAL");
+        retainedBus = latestChildEventBus();
+      }
+
+      const invocation = mode === "initial"
+        ? runAgent(ctx, "Explore", "owned abort", {
+            pi,
+            onTextDelta: (_delta, fullText) => seenFullText.push(fullText),
+          })
+        : resumeAgent(session as any, "owned abort", {
+            pi,
+            onTextDelta: (_delta, fullText) => seenFullText.push(fullText),
+          });
+      let settled = false;
+      const pending = invocation.then(result => {
+        settled = true;
+        return result;
+      });
+
+      await nextMacrotask();
+      const eventBus = retainedBus ?? latestChildEventBus();
+      expect(createEventBus).toHaveBeenCalledOnce();
+      expect(defaultResourceLoaderCtor).toHaveBeenCalledWith(expect.objectContaining({ eventBus }));
+      expect(eventBus).not.toBe(pi.events);
+      expect(settled).toBe(false);
+
+      // The barrier can be observed while the initial session is idle. Its
+      // continuation's agent_start must beat the lifecycle's safety check.
+      session.isStreaming = false;
+      eventBus.emit("context-compact:barrier-open", compactedBarrier(10));
+      expect(settled).toBe(false);
+      session.isStreaming = true;
+      emitSession({ type: "agent_start" });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      // A second attempt replaces the first barrier, but the same invocation
+      // stays attached until the final continuation settles.
+      eventBus.emit("context-compact:attempt-start", attempt(20));
+      session.isStreaming = false;
+      eventBus.emit("context-compact:barrier-open", compactedBarrier(20));
+      expect(settled).toBe(false);
+      session.isStreaming = true;
+      emitSession({ type: "agent_start" });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      session.isStreaming = false;
+      emitFinalAssistant(emitSession, session);
+      emitSession({ type: "agent_settled" });
+      const result = await pending;
+
+      const resultText = "responseText" in result ? result.responseText : result.text;
+      expect(resultText).toBe("FINAL CONTINUATION");
+      expect(result.failure).toBeUndefined();
+      expect(seenFullText).toEqual(["FINAL CONTINUATION"]);
+      expect(session.prompt).toHaveBeenCalledTimes(mode === "initial" ? 1 : 2);
+    },
+  );
+
+  it.each(["failed", "invalidated"] as const)(
+    "keeps a matching %s barrier terminal after the provider abort",
+    async outcome => {
+      const { session } = lifecycleSession();
+      const childEventBus = await retainSession(session);
+      const abortError = new Error("This operation was aborted");
+      session.prompt = vi.fn(async () => {
+        childEventBus.emit("context-compact:attempt-start", attempt(30));
+        childEventBus.emit("context-compact:barrier-open", {
+          ...compactedBarrier(30),
+          outcome,
+        });
+        throw abortError;
+      }) as any;
+
+      await expect(resumeAgent(session as any, "owned abort", { pi }))
+        .rejects.toThrow("This operation was aborted");
+      expect(session.prompt).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves the no-output provider error classification", async () => {
+    const { session, emitSession } = lifecycleSession();
+    const message = { role: "assistant", content: [], stopReason: "error" };
+    session.prompt = vi.fn(async () => {
+      emitSession({ type: "message_start", message: { role: "assistant" } });
+      emitSession({ type: "message_end", message });
+      session.messages.push(message);
+    }) as any;
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "no output", { pi });
+
+    expect(result.responseText).toBe("");
+    expect(result.failure).toBe("provider error with no output");
+  });
+
+  it("keeps an ordinary provider abort terminal without a matching lifecycle", async () => {
+    const { session } = lifecycleSession();
+    const abortError = new Error("This operation was aborted");
+    session.prompt = vi.fn(async () => { throw abortError; }) as any;
+
+    await expect(resumeAgent(session as any, "ordinary abort", { pi }))
+      .rejects.toThrow("This operation was aborted");
+  });
+
+  it("does not attach to the parent bus or unrelated child events", async () => {
+    const { session, emitSession } = lifecycleSession();
+    const childEventBus = await retainSession(session);
+    const unrelatedChildBus = createEventBus();
+    const abortError = new Error("This operation was aborted");
+    session.prompt = vi.fn(async () => {
+      session.isStreaming = true;
+      // These parent-bus events look valid, but this run is owned by the child bus.
+      pi.events.emit("context-compact:attempt-start", attempt(40));
+      pi.events.emit("context-compact:barrier-open", compactedBarrier(40));
+      // Events from another child bus are unrelated even with this child's identity.
+      unrelatedChildBus.emit("context-compact:attempt-start", attempt(40));
+      unrelatedChildBus.emit("context-compact:barrier-open", compactedBarrier(40));
+      childEventBus.emit("context-compact:attempt-start", {
+        attemptId: "not-an-integer",
+        barrierId: 40,
+        sessionId: "child-session",
+        generation: 1,
+      });
+      childEventBus.emit("context-compact:barrier-open", {
+        ...compactedBarrier(40),
+        outcome: "unknown",
+      });
+      childEventBus.emit("context-compact:attempt-start", {
+        ...attempt(40),
+        sessionId: "other-session",
+      });
+      childEventBus.emit("context-compact:barrier-open", {
+        barrierId: 40,
+        sessionId: "other-session",
+        generation: 1,
+        outcome: "compacted",
+      });
+      // A barrier for this child without its own attempt is also unrelated.
+      childEventBus.emit("context-compact:barrier-open", compactedBarrier(40));
+      // Malformed and wrong-generation events cannot create ownership.
+      childEventBus.emit("context-compact:attempt-start", {
+        ...attempt(41),
+        generation: "not-an-integer",
+      });
+      childEventBus.emit("context-compact:barrier-open", {
+        ...compactedBarrier(40),
+        generation: 2,
+      });
+      emitSession({ type: "agent_settled" });
+      throw abortError;
+    }) as any;
+
+    await expect(resumeAgent(session as any, "unrelated abort", { pi }))
+      .rejects.toThrow("This operation was aborted");
+    expect(session.prompt).toHaveBeenCalledOnce();
   });
 });
 
