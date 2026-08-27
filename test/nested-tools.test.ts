@@ -42,6 +42,7 @@ function tools(
   depth = 1,
   maxSubagentDepth = 2,
   configCwd = cwd,
+  defaultMaxTurns?: number,
 ) {
   return createNestedSubagentTools({
     manager,
@@ -51,11 +52,28 @@ function tools(
     maxSubagentDepth,
     allowedSubagents,
     configCwd,
+    defaultMaxTurns,
   });
 }
 
 async function execute(tool: any, params: Record<string, unknown>, executionCwd = cwd) {
   return tool.execute("call-1", params, undefined, undefined, ctx(executionCwd));
+}
+
+function resumableRecord(type = "scout") {
+  const record = {
+    id: "child-1",
+    type,
+    status: "completed" as const,
+    result: "prior result",
+    parentAgentId: "parent-1",
+    runRevision: 1,
+    settledRevision: 1,
+    resultConsumed: true,
+  };
+  records.set(record.id, record);
+  manager.resume.mockResolvedValue(record);
+  return record;
 }
 
 beforeEach(() => {
@@ -283,6 +301,51 @@ describe("child-safe nested Agent tools", () => {
       prompt: "Continue",
     })).isError).toBe(true);
     expect(manager.resume).not.toHaveBeenCalled();
+  });
+
+  it("uses explicit max_turns before the current agent frontmatter on nested resume", async () => {
+    writeAgent("scout", "max_turns: 20\n");
+    const record = resumableRecord();
+    const [agent] = tools("all", 1, 2, cwd, 30);
+
+    await execute(agent, { resume: record.id, prompt: "Continue", max_turns: 5 });
+
+    expect(manager.resume).toHaveBeenCalledOnce();
+    expect(manager.resume).toHaveBeenCalledWith(
+      record.id,
+      "Continue",
+      undefined,
+      { maxTurns: 5 },
+    );
+  });
+
+  it("uses the current agent frontmatter when nested resume omits max_turns", async () => {
+    writeAgent("scout", "max_turns: 20\n");
+    const record = resumableRecord();
+    const [agent] = tools("all", 1, 2, cwd, 30);
+
+    await execute(agent, { resume: record.id, prompt: "Continue" });
+
+    expect(manager.resume).toHaveBeenCalledWith(
+      record.id,
+      "Continue",
+      undefined,
+      { maxTurns: 20 },
+    );
+  });
+
+  it("uses the project default when nested resume has no frontmatter max_turns", async () => {
+    const record = resumableRecord();
+    const [agent] = tools("all", 1, 2, cwd, 30);
+
+    await execute(agent, { resume: record.id, prompt: "Continue" });
+
+    expect(manager.resume).toHaveBeenCalledWith(
+      record.id,
+      "Continue",
+      undefined,
+      { maxTurns: 30 },
+    );
   });
 
   it("waits for a queued owned child to start and settle", async () => {
