@@ -559,7 +559,7 @@ export default function (pi: ExtensionAPI) {
 
   // ---- Cancellable pending notifications ----
   // Holds notifications briefly so get_subagent_result can cancel them before
-  // delivery. A claimed compaction barrier keeps them out of Pi's pending queue.
+  // delivery.
   interface HeldCompletion extends AgentRunCompletion {
     readonly partial: boolean;
     readonly generation: number;
@@ -576,28 +576,7 @@ export default function (pi: ExtensionAPI) {
   const QUEUE_WAIT_POLL_MS = Math.floor(NUDGE_HOLD_MS / 4);
   let currentCtx: ExtensionContext | undefined;
   let sessionGeneration = 0;
-  let waitingForBarrier = false;
-  let heldBarrierId: number | undefined;
-  let heldCompactorSessionId: string | undefined;
-  let heldCompactorGeneration: number | undefined;
-  let heldParentGeneration: number | undefined;
   let deliveryInProgress = false;
-
-  interface BeforeContinuationPayload {
-    hold: boolean;
-    readonly willRestartParent: true;
-    claimedBy?: "context-compact";
-    barrierId?: number;
-    sessionId?: string;
-    generation?: number;
-  }
-
-  interface BarrierOpenPayload {
-    readonly barrierId: number;
-    readonly sessionId: string;
-    readonly generation: number;
-    readonly outcome: "compacted" | "failed" | "invalidated";
-  }
 
   function clearMatchingPendingRevision({ record, revision }: AgentRunCompletion): void {
     if (record.pendingDeliveryRevision === revision) {
@@ -688,17 +667,12 @@ export default function (pi: ExtensionAPI) {
     currentBatchAgents = [];
     if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
     batchFinalizeTimer = undefined;
-    waitingForBarrier = false;
-    heldBarrierId = undefined;
-    heldCompactorSessionId = undefined;
-    heldCompactorGeneration = undefined;
-    heldParentGeneration = undefined;
   }
 
   function attemptCompletionDelivery(): void {
     const ctx = currentCtx;
     const generation = sessionGeneration;
-    if (deliveryInProgress || waitingForBarrier || heldCompletions.size === 0 || !ctx?.isIdle()) return;
+    if (deliveryInProgress || heldCompletions.size === 0 || !ctx?.isIdle()) return;
 
     for (const [id, completion] of heldCompletions) {
       if (!isCurrentCompletion(completion)) {
@@ -711,25 +685,6 @@ export default function (pi: ExtensionAPI) {
     deliveryInProgress = true;
     try {
       const pending = [...heldCompletions.values()];
-      const payload: BeforeContinuationPayload = {
-        hold: false,
-        willRestartParent: true,
-      };
-      pi.events.emit("context-compact:before-continuation", payload);
-      if (
-        payload.hold
-        && payload.claimedBy === "context-compact"
-        && Number.isInteger(payload.barrierId)
-        && typeof payload.sessionId === "string"
-        && Number.isInteger(payload.generation)
-      ) {
-        waitingForBarrier = true;
-        heldBarrierId = payload.barrierId;
-        heldCompactorSessionId = payload.sessionId;
-        heldCompactorGeneration = payload.generation;
-        heldParentGeneration = generation;
-        return;
-      }
 
       // Event listeners can synchronously start work. Delivery is valid only
       // while this is still the same idle parent session.
@@ -777,34 +732,6 @@ export default function (pi: ExtensionAPI) {
     }
     attemptCompletionDelivery();
   }
-
-  const unsubscribeBarrierOpen = pi.events.on("context-compact:barrier-open", (raw) => {
-    const payload = raw as BarrierOpenPayload;
-    if (
-      !waitingForBarrier
-      || payload.barrierId !== heldBarrierId
-      || payload.sessionId !== heldCompactorSessionId
-      || payload.generation !== heldCompactorGeneration
-    ) return;
-    const parentGeneration = heldParentGeneration;
-    waitingForBarrier = false;
-    heldBarrierId = undefined;
-    heldCompactorSessionId = undefined;
-    heldCompactorGeneration = undefined;
-    heldParentGeneration = undefined;
-    if (payload.outcome === "invalidated") {
-      for (const [id, completion] of heldCompletions) {
-        if (
-          completion.generation !== parentGeneration
-          || completion.record.runRevision !== completion.revision
-        ) continue;
-        heldCompletions.delete(id);
-        clearMatchingPendingRevision(completion);
-      }
-      return;
-    }
-    attemptCompletionDelivery();
-  });
 
   function sendIndividualNudge(record: AgentRecord, revision: number) {
     const generation = record.parentSessionGeneration ?? sessionGeneration;
@@ -1586,9 +1513,6 @@ export default function (pi: ExtensionAPI) {
     scheduler.stop();
   });
 
-  // Settlement contract: a synchronous completion producer claims
-  // `before-continuation` in its settlement handler. Keep this call synchronous;
-  // any future async settlement path must claim before its first await.
   pi.on("agent_settled", () => {
     if (mainCardPendingRuns.size > 0 && mainOutcome.status === "completed") {
       mainCardWaitingForContinuation = true;
@@ -1629,7 +1553,6 @@ export default function (pi: ExtensionAPI) {
     mainCardAppended = false;
     mainPromptExpected = false;
     mainSessionActive = false;
-    unsubscribeBarrierOpen();
     await manager.waitForAll();
     fleet.dispose();
     // Awaited: it emits `session_shutdown` into every retained child session so
@@ -1939,7 +1862,7 @@ Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Agent calls run in background and return an ID immediately. Omit run_in_background; false is rejected.
 - Successful dispatch results terminate the parent only when every finalized result in the parallel tool batch is terminating. Rejections keep the parent active for correction.
-- Parallel work: one message with multiple Agent calls. Completion callbacks wait for parent idle, stay concise, and can be delayed by compaction; use get_subagent_result for full stored output.
+- Parallel work: one message with multiple Agent calls. Completion callbacks wait for parent idle and stay concise; use get_subagent_result for full stored output.
 - Never fabricate or predict a pending agent's results. If asked before the callback arrives, say it is still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent in background and returns the same ID; steer_subagent messages a running one.${isolationCompactGuideline}`;
@@ -1963,7 +1886,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Agent calls run in background and return an agent ID immediately. Omit run_in_background; an explicit false is rejected. When you launch multiple independent agents, send all tool calls in one message so they run concurrently.
 - If the user explicitly asks for parallel agents, send one message with multiple Agent tool uses.
 - Successful Agent dispatches terminate the parent only when every finalized tool result in that parallel batch is terminating. A rejected dispatch keeps the parent active so it can correct the call.
-- When an agent is done, you receive one concise callback after the parent is idle and any compaction barrier opens. Use get_subagent_result for full stored output, then summarize relevant results for the user.
+- When an agent is done, you receive one concise callback after the parent is idle. Use get_subagent_result for full stored output, then summarize relevant results for the user.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
 - You will be notified when background work completes — do NOT poll or sleep. Continue other work or respond to the user.
 - Never fabricate or predict a pending agent's results. If the user asks before the callback arrives, say it is still running.

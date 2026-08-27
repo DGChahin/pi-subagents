@@ -19,7 +19,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("prefers agent config over tool-call params for locked fields", () => {
+  it("lets explicit max_turns override frontmatter while config locks other fields", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         model: "provider/config-model",
@@ -44,11 +44,17 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.modelInput).toBe("provider/config-model");
     expect(resolved.modelFromParams).toBe(false);
     expect(resolved.thinking).toBe("high");
-    expect(resolved.maxTurns).toBe(42);
+    expect(resolved.maxTurns).toBe(1);
     expect(resolved.inheritContext).toBe(false);
     expect(resolved.runInBackground).toBe(false);
     expect(resolved.isolated).toBe(false);
     expect(resolved.isolation).toBe("worktree");
+  });
+
+  it("retains frontmatter max_turns when the explicit value is omitted", () => {
+    const resolved = resolveAgentInvocationConfig(makeConfig({ maxTurns: 42 }), {});
+
+    expect(resolved.maxTurns).toBe(42);
   });
 
   it("uses tool-call params when no agent config is available", () => {

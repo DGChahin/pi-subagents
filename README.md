@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Skill preloading** — inject named skills into agent system prompts, discovered from `.pi/skills/`, `.agents/skills/`, and global locations (Pi-standard `<name>/SKILL.md` directory layout supported)
 - **Tool denylist** — block specific tools via `disallowed_tools` frontmatter
 - **Styled completion notifications** — concise background callbacks identify completed agents and point to output stored for `get_subagent_result`. Themed notification boxes can still show a short user-facing preview
-- **Idle-safe completion delivery** — a cross-extension compaction barrier can hold and coalesce completion callbacks before they enter Pi's pending-message queue
+- **Idle-safe completion delivery** — completion callbacks wait for an idle parent and coalesce before entering Pi's pending-message queue
 - **Event bus** — lifecycle events (`subagents:created`, `started`, `completed`, `failed`, `steered`, `compacted`) emitted via `pi.events`, enabling other extensions to react to sub-agent activity
 - **Cross-extension RPC** — other pi extensions can spawn and stop subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`). Standardized reply envelopes with protocol versioning. Emits `subagents:ready` on session start
 - **Schedule subagents** — pass `schedule` to the `Agent` tool to fire on cron / interval / one-shot. Session-scoped jobs with PID-locked persistence; results land via the same `subagent-notification` followUp path as manual background completions; manage via `/agents → Scheduled jobs`
@@ -84,7 +84,7 @@ Schedule formats:
 - **One-shot relative** — `"+10m"`, `"+2h"`, `"+1d"`. Fires once at that future time.
 - **One-shot absolute** — full ISO timestamp, e.g. `"2026-12-25T09:00:00.000Z"`.
 
-Successful schedule registration also returns `terminate: true`. When a schedule fires, the spawn runs in background. Its completion uses the same idle and compaction-barrier path as a manual background agent, then arrives as a concise `subagent-notification` follow-up.
+Successful schedule registration also returns `terminate: true`. When a schedule fires, the spawn runs in background. Its completion uses the same idle-aware path as a manual background agent, then arrives as a concise `subagent-notification` follow-up.
 
 Schedules are **session-scoped**: they reset on `/new` and restore on `/resume`. List and cancel via `/agents → Scheduled jobs` (creation is the `Agent` tool's job — there is no parallel manual-create wizard). Storage at `<cwd>/.pi/subagent-schedules/<sessionId>.json` with PID-based file locking for cross-instance safety.
 
@@ -165,7 +165,7 @@ It is a literal clone — the session's own entries and the same system prompt, 
 | `direct` | the agent starts here, immediately, with your message verbatim as its prompt. No model call at all, so no latency before it begins |
 | `off` | `@` means only "attach a file" again |
 
-Either way the started agent honours its own frontmatter — `model:`, `thinking:`, `max_turns:` all apply, since neither path passes them and the agent's config wins. Mentioning something as the very first thing in a session works: there is simply no history to carry, and the clone still runs on your model and system prompt. If it cannot deliver at all — a model can always answer in prose instead of calling the tool — the agent is started directly with your text and the toast says so, rather than leaving you with nothing running.
+Either way the started agent honours its own frontmatter for `model:` and `thinking:` because neither mention path passes those fields. `max_turns:` follows normal `Agent` precedence: an explicit call value overrides frontmatter; otherwise its configured or default value applies. Mentioning something as the very first thing in a session works: there is simply no history to carry, and the clone still runs on your model and system prompt. If it cannot deliver at all — a model can always answer in prose instead of calling the tool — the agent is started directly with your text and the toast says so, rather than leaving you with nothing running.
 
 `model` is also the only mode that works outside the TUI: `pi -p '@plan the migration'` clones, spawns, and reports through the normal completion path, where a direct start would have detached the agent and printed nothing. Messaging and resuming stay TUI-only for that reason, in both modes.
 
@@ -279,7 +279,7 @@ All fields are optional — sensible defaults for everything.
 | `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). `none`, `no`, and `false` are accepted spellings of `off` |
 | `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
-| `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
+| `max_turns` | unlimited | Max agentic turns before graceful shutdown. An explicit `Agent` call value overrides this default and any frontmatter value; `0` or omit for unlimited when no call value is supplied |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
 | `session_dir` | pi default | Optional session directory when `persist_session: true`; omitted uses pi's normal session location, and relative paths resolve from the agent cwd. A session outside the parent's session directory (this override, or `isolation: worktree`) is listed separately, so it shows as a root instead of nesting |
@@ -290,7 +290,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter is authoritative for fresh starts. If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, `run_in_background`, `isolated`, or `isolation`, those values are locked for that agent. `Agent` tool parameters only fill fields the agent config leaves unspecified. A fresh top-level start rejects frontmatter `run_in_background: false`. Schedule registration is allowed because schedules always force background; an explicit tool parameter `run_in_background: false` is still rejected. Resume uses the stored session, ignores the required `subagent_type` configuration, runs in background, and returns the existing ID immediately.
+Frontmatter is authoritative for fresh starts except that an explicit `max_turns` supplied to an `Agent` call overrides any frontmatter `max_turns` value and the default. If an agent file sets `model`, `thinking`, `inherit_context`, `run_in_background`, `isolated`, or `isolation`, those values are locked for that agent. `Agent` tool parameters only fill fields the agent config leaves unspecified, except for this explicit `max_turns` override. A fresh top-level start rejects frontmatter `run_in_background: false`. Schedule registration is allowed because schedules always force background; an explicit tool parameter `run_in_background: false` is still rejected. Resume uses the stored session, ignores the required `subagent_type` configuration, runs in background, and returns the existing ID immediately.
 
 **Forgiving `model:` resolution.** A `model:` pin is matched against pi's model registry tolerantly, so cosmetic id variations don't silently drop the agent back to the parent's model: `.` and `-` are treated as equivalent in version numbers (`claude-haiku-4.5` ≡ `claude-haiku-4-5`), a trailing `-YYYYMMDD` date stamp is optional (`anthropic/claude-haiku-4-5-20251001` matches an undated registry id and vice-versa), and a `provider/modelId` whose named provider doesn't carry that model retries the bare id against every provider. Precedence is **exact → fuzzy under the named provider → same model under any provider → unavailable**, so an exact match always wins and dated snapshots aren't conflated. If nothing resolves, the pin can't run and the agent inherits the parent model — `/agents → Agent types` flags this case as `(unavailable, fallback: inherit)` and shows the resolved target `(→ provider/id)` when resolution lands on a different provider or version than configured. (This is distinct from [Model Scope](#model-scope) enforcement, which matches the `enabledModels` allowlist by *exact* entry.)
 
@@ -315,6 +315,8 @@ The hard cap is depth 2 by default: main session (0) → subagent (1) → nested
 Nested children don't occupy `maxConcurrent` slots — their parent already holds one, and queueing them behind it would deadlock a parent waiting on its own child. The depth cap bounds how *deep* nesting goes, not how *wide*: a parent's only limit on concurrent children is that each spawn costs it a turn. Pair `allowed_subagents` with a `max_turns` on that agent if you want a hard ceiling on its fan-out.
 
 Because a subagent session never activates this extension (that is what keeps a child from building a second agent manager, and it is why nested tools are injected directly instead), a subagent also gets none of the extension's other surfaces: no `/agents` command, no cross-extension RPC handlers, no `subagents:ready` event.
+
+Managed pi-subagents children use Pi's native context compaction inherited from their `SettingsManager`.
 
 ### Tool & extension scoping
 
@@ -379,7 +381,7 @@ Launch a sub-agent.
 | `subagent_type` | string | yes | Agent type (built-in or custom) |
 | `model` | string | no | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
-| `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_turns` | number | no | Max agentic turns. An explicit call value overrides any frontmatter value; omit for unlimited when no configured limit applies |
 | `run_in_background` | boolean | no | Background execution is required; omit it or pass `true`. Explicit `false` is rejected |
 | `resume` | string | no | Agent ID to resume asynchronously; returns the same ID and `terminate: true` immediately |
 | `isolated` | boolean | no | No extension/MCP tools |
@@ -434,6 +436,8 @@ Settings                                    ← max concurrency, max turns, grac
 - **Settings** — configure max concurrency, default max turns, grace turns, and join mode at runtime
 
 ## Graceful Max Turns
+
+An explicit `max_turns` supplied to an `Agent` call overrides any frontmatter value. When neither the call nor frontmatter supplies a limit, agents are unlimited by default.
 
 Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 
@@ -583,28 +587,12 @@ Agent lifecycle events are emitted via `pi.events.emit()` so other extensions ca
 | `subagents:ready` | RPC handlers registered and armed — fired on session start; not emitted in a session that excludes pi-subagents | — |
 | `subagents:settings_loaded` | Persisted settings applied at extension init | `settings` (merged global + project; compatibility-only `backgroundByDefault` canonicalized to `true`) |
 | `subagents:settings_changed` | `/agents` → Settings mutation was applied | `settings` (`backgroundByDefault: true`), `persisted` (`boolean` — `false` on write failure) |
-| `context-compact:before-continuation` | Before an idle completion callback can create a parent turn | mutable `{ hold: false, willRestartParent: true, claimedBy?: "context-compact", barrierId?: number, sessionId?: string, generation?: number }` |
-| `context-compact:attempt-pending` | Threshold work becomes pending or deferred; emitted synchronously before asynchronous compactability checking and before any later attempt-start, once per barrier | `{ barrierId: number, sessionId: string, generation: number }` |
-| `context-compact:attempt-start` | Active compaction attempt created; emitted synchronously before its owned abort | `{ attemptId: number, barrierId: number, sessionId: string, generation: number }` |
-| `context-compact:barrier-open` | A claimed compaction barrier opens | `{ barrierId: number, sessionId: string, generation: number, outcome: "compacted" \| "failed" \| "invalidated" }` |
 
-### Idle completion and compaction barrier protocol
+### Idle completion protocol
 
 Successful background spawn, asynchronous resume, and schedule registration results include `terminate: true`. This lets an all-Agent dispatch batch end the parent run; Pi preserves parallel execution and terminates only after every finalized result in the batch is terminating. Error and rejection results omit termination so the parent can correct them.
 
 Completed results stay in pi-subagents state while the current parent context reports `isIdle() === false`. The extension retries at `agent_settled`; it does not create a Pi pending message to interrupt active work. Each top-level spawn or background resume captures the parent session generation when it is dispatched, before any queue wait. A later queue start preserves that identity, so an old-session completion cannot enter a replacement session and its stored result remains available for explicit retrieval.
-
-Each child-session prompt listens for `context-compact:attempt-pending`, `context-compact:attempt-start`, and `context-compact:barrier-open` on the private child `EventBus` supplied to `DefaultResourceLoader` and retained for that `AgentSession`, not on the parent extension bus. The pending event has the exact payload `{ barrierId: number, sessionId: string, generation: number }`; it is emitted synchronously when threshold work becomes pending or deferred, before asynchronous compactability checking and before any later attempt-start, exactly once per barrier. The child consumer accepts a pending event only for its own session, records that identity, and retains the managed run instead of settling it.
-
-The start event has the exact payload `{ attemptId: number, barrierId: number, sessionId: string, generation: number }`; it is synchronous, arrives after context-compact records the active attempt, and arrives before that attempt's owned abort. pi-subagents accepts it only when `sessionId` is the child session's ID. A pending run is promoted only by a start whose `barrierId`, `sessionId`, and `generation` all match the pending identity. pi-subagents replaces its tracked attempt on every valid start so repeated attempts remain attached; unrelated or mismatched starts do not change the pending run.
-
-Codex represents the owned abort in the child session as an assistant message with `stopReason: "error"` and `errorMessage: "This operation was aborted"`. pi-subagents treats that cancellation as owned only when the child consumer has already accepted the matching attempt-start identity; otherwise, cancellation remains terminal.
-
-The `barrier-open` payload remains `{ barrierId: number, sessionId: string, generation: number, outcome: "compacted" | "failed" | "invalidated" }`; it has no `attemptId`. A child consumer correlates it with the pending identity until promotion, then with the latest accepted start; all three identity fields must match. A matching `failed` or `invalidated` barrier releases the managed run without starting a continuation. A matching `compacted` barrier keeps the run attached through the automatic continuation and releases it only after the final continuation's `agent_settled` event. Malformed, unrelated-session, or mismatched events are ignored and cannot settle the child run.
-
-`context-compact:attempt-pending` is separate from this parent callback protocol: it is not a `before-continuation` claim and does not hold a callback. When the parent is idle, pi-subagents synchronously emits `context-compact:before-continuation` with `{ hold: false, willRestartParent: true }`. pi-context-compact can set `hold = true`, `claimedBy = "context-compact"`, and the barrier identity: integer `barrierId`, compactor `sessionId`, and integer compactor `generation`. pi-subagents holds completions only when the claim marker and all three identity fields are present. Claimed completions stay outside Pi and coalesce by agent ID.
-
-For that held parent completion, pi-subagents accepts `context-compact:barrier-open` only when `barrierId`, compactor `sessionId`, and compactor `generation` exactly match the held barrier. Outcomes `compacted` and `failed` retry delivery: it re-emits `context-compact:before-continuation`, confirms the same parent session is still idle, and then sends one coalesced callback with `triggerTurn: true` if no listener holds it again. The callback names every pending agent ID; full results remain in package state for `get_subagent_result`. Outcome `invalidated` discards held completions for the captured parent session generation and does not retry them. A mismatched barrier event has no effect. If no extension claims the request with a complete identity, idle delivery continues immediately for backward compatibility.
 
 `tokens.total` = `input + output + cacheWrite`. `cacheRead` is excluded — each turn's `cacheRead` is the cumulative cached prefix re-read on that one API call, so summing per-message would over-count it as a measure of work done. Use `contextUsage.percent` for current context size.
 

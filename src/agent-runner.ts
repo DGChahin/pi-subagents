@@ -13,7 +13,6 @@ import {
   createAgentSession,
   createEventBus,
   DefaultResourceLoader,
-  type EventBus,
   type ExtensionAPI,
   getAgentDir,
   SessionManager,
@@ -45,225 +44,6 @@ export const SUBAGENT_TOOL_NAMES = {
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
-
-const CONTEXT_COMPACT_ATTEMPT_START_EVENT = "context-compact:attempt-start";
-const CONTEXT_COMPACT_ATTEMPT_PENDING_EVENT = "context-compact:attempt-pending";
-const CONTEXT_COMPACT_BARRIER_OPEN_EVENT = "context-compact:barrier-open";
-const sessionEventBuses = new WeakMap<AgentSession, EventBus>();
-
-interface ContextCompactBarrierIdentity {
-  readonly barrierId: number;
-  readonly sessionId: string;
-  readonly generation: number;
-}
-
-interface ContextCompactAttemptStart extends ContextCompactBarrierIdentity {
-  readonly attemptId: number;
-}
-
-type ContextCompactAttemptPending = ContextCompactBarrierIdentity;
-
-type ContextCompactBarrierOutcome = "compacted" | "failed" | "invalidated";
-
-interface ContextCompactBarrierOpen extends ContextCompactBarrierIdentity {
-  readonly outcome: ContextCompactBarrierOutcome;
-}
-
-type ManagedPromptOutcome = "none" | "compacted" | "failed" | "invalidated" | "aborted";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseContextCompactAttemptStart(value: unknown): ContextCompactAttemptStart | undefined {
-  if (!isRecord(value)) return undefined;
-  const { attemptId, barrierId, sessionId, generation } = value;
-  if (
-    typeof attemptId !== "number" || !Number.isInteger(attemptId)
-    || typeof barrierId !== "number" || !Number.isInteger(barrierId)
-    || typeof sessionId !== "string" || sessionId.length === 0
-    || typeof generation !== "number" || !Number.isInteger(generation)
-  ) return undefined;
-  return { attemptId, barrierId, sessionId, generation };
-}
-
-function parseContextCompactBarrierOpen(value: unknown): ContextCompactBarrierOpen | undefined {
-  if (!isRecord(value)) return undefined;
-  const { barrierId, sessionId, generation, outcome } = value;
-  if (
-    typeof barrierId !== "number" || !Number.isInteger(barrierId)
-    || typeof sessionId !== "string" || sessionId.length === 0
-    || typeof generation !== "number" || !Number.isInteger(generation)
-    || (outcome !== "compacted" && outcome !== "failed" && outcome !== "invalidated")
-  ) return undefined;
-  return { barrierId, sessionId, generation, outcome };
-}
-
-function parseContextCompactAttemptPending(value: unknown): ContextCompactAttemptPending | undefined {
-  if (!isRecord(value)) return undefined;
-  const { barrierId, sessionId, generation } = value;
-  if (
-    typeof barrierId !== "number" || !Number.isInteger(barrierId)
-    || typeof sessionId !== "string" || sessionId.length === 0
-    || typeof generation !== "number" || !Number.isInteger(generation)
-  ) return undefined;
-  return { barrierId, sessionId, generation };
-}
-
-function sameContextCompactBarrier(
-  left: ContextCompactBarrierIdentity,
-  right: ContextCompactBarrierIdentity,
- ): boolean {
-  return left.barrierId === right.barrierId
-    && left.sessionId === right.sessionId
-    && left.generation === right.generation;
-}
-
-async function promptWithCompactionLifecycle(
-  session: AgentSession,
-  eventBus: EventBus,
-  text: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const sessionId = session.sessionId;
-  let attempt: ContextCompactAttemptStart | undefined;
-  let pending: ContextCompactAttemptPending | undefined;
-  let rejectedPending: ContextCompactBarrierIdentity | undefined;
-  let barrier: ContextCompactBarrierOpen | undefined;
-  let waitingForContinuationStart = false;
-  let completionResolved = false;
-  let lateAttemptCheck: ReturnType<typeof setImmediate> | undefined;
-  let promptSettled = false;
-  let resolveCompletion!: (outcome: ManagedPromptOutcome) => void;
-  const completion = new Promise<ManagedPromptOutcome>((resolve) => {
-    resolveCompletion = resolve;
-  });
-  const finish = (outcome: ManagedPromptOutcome): void => {
-    if (completionResolved) return;
-    completionResolved = true;
-    if (lateAttemptCheck !== undefined) {
-      clearImmediate(lateAttemptCheck);
-      lateAttemptCheck = undefined;
-    }
-    resolveCompletion(outcome);
-  };
-  const onPending = (value: unknown): void => {
-    const next = parseContextCompactAttemptPending(value);
-    if (!next || next.sessionId !== sessionId) return;
-    if (attempt && sameContextCompactBarrier(attempt, next)) return;
-    if (pending && sameContextCompactBarrier(pending, next)) return;
-    if (rejectedPending && sameContextCompactBarrier(rejectedPending, next)) return;
-    pending = next;
-    attempt = undefined;
-    rejectedPending = undefined;
-    barrier = undefined;
-    waitingForContinuationStart = false;
-  };
-  const onAttemptStart = (value: unknown): void => {
-    const next = parseContextCompactAttemptStart(value);
-    if (!next || next.sessionId !== sessionId) return;
-    if (rejectedPending && sameContextCompactBarrier(rejectedPending, next)) return;
-    if (pending && !sameContextCompactBarrier(pending, next)) return;
-    attempt = next;
-    pending = undefined;
-    rejectedPending = undefined;
-    barrier = undefined;
-    waitingForContinuationStart = false;
-  };
-  const onBarrierOpen = (value: unknown): void => {
-    const next = parseContextCompactBarrierOpen(value);
-    if (!next || next.sessionId !== sessionId) return;
-    if (pending && !sameContextCompactBarrier(pending, next)) return;
-    if (attempt && sameContextCompactBarrier(attempt, next)) {
-      pending = undefined;
-      rejectedPending = undefined;
-      barrier = next;
-    } else if (pending && sameContextCompactBarrier(pending, next)) {
-      pending = undefined;
-      rejectedPending = next;
-      barrier = undefined;
-      waitingForContinuationStart = false;
-      if (next.outcome !== "compacted" || promptSettled) {
-        finish(next.outcome === "compacted" ? "none" : next.outcome);
-      }
-      return;
-    } else {
-      return;
-    }
-    if (next.outcome !== "compacted") {
-      finish(next.outcome);
-      return;
-    }
-    waitingForContinuationStart = !session.isStreaming;
-    if (waitingForContinuationStart) {
-      queueMicrotask(() => {
-        if (
-          !completionResolved
-          && barrier === next
-          && waitingForContinuationStart
-          && !session.isStreaming
-          && session.pendingMessageCount === 0
-        ) finish("failed");
-      });
-    }
-  };
-  const onSessionEvent = (event: AgentSessionEvent): void => {
-    if (event.type === "agent_start" && waitingForContinuationStart) {
-      waitingForContinuationStart = false;
-      return;
-    }
-    if (
-      event.type === "agent_settled"
-      && barrier?.outcome === "compacted"
-      && pending === undefined
-      && !waitingForContinuationStart
-    ) finish("compacted");
-  };
-  const unsubscribeSession = session.subscribe(onSessionEvent);
-  const unsubscribePending = eventBus.on(
-    CONTEXT_COMPACT_ATTEMPT_PENDING_EVENT,
-    onPending,
-  );
-  const unsubscribeEvents = eventBus.on(
-    CONTEXT_COMPACT_ATTEMPT_START_EVENT,
-    onAttemptStart,
-  );
-  const unsubscribeBarrier = eventBus.on(
-    CONTEXT_COMPACT_BARRIER_OPEN_EVENT,
-    onBarrierOpen,
-  );
-  let promptError: unknown;
-  let promptFailed = false;
-  const onAbort = (): void => finish("aborted");
-  if (signal) {
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  }
-  try {
-    try {
-      await session.prompt(text);
-    } catch (error) {
-      promptFailed = true;
-      promptError = error;
-    }
-    promptSettled = true;
-    if (!attempt && !pending) {
-      lateAttemptCheck = setImmediate(() => {
-        lateAttemptCheck = undefined;
-        if (!attempt && !pending) finish("none");
-      });
-    }
-    const outcome = await completion;
-    if (promptFailed && outcome !== "compacted") throw promptError;
-  } finally {
-    if (lateAttemptCheck !== undefined) clearImmediate(lateAttemptCheck);
-    signal?.removeEventListener("abort", onAbort);
-    unsubscribeBarrier();
-    unsubscribeEvents();
-    unsubscribePending();
-    unsubscribeSession();
-  }
-}
 
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
@@ -947,9 +727,6 @@ export async function runAgent(
   // suppresses handler binding and tool registration; it is not a sandbox.
   const excludeNames = new Set((excludeExtensions ?? []).map((n) => n.toLowerCase()));
   const hasExcludes = excludeNames.size > 0;
-  // The override filters loaded extensions down to `keepNames` minus `excludeNames`.
-  // It's only needed when we're neither loading everything without excludes
-  // (`extensions: true` or a `"*"` wildcard) nor nothing (`noExtensions`).
   const loadAll = extensions === true || extensionsSpec?.wildcard === true;
   const additionalExtensionPaths = extensionsSpec?.paths.length ? extensionsSpec.paths : undefined;
   // Pre-filter discovered set, captured by the override — the exclude-typo warning
@@ -1090,6 +867,7 @@ export async function runAgent(
         maxSubagentDepth: effectiveMaxDepth,
         allowedSubagents: agentConfig.allowedSubagents,
         configCwd,
+        defaultMaxTurns: getDefaultMaxTurns(),
       })
     : [];
   const nestedToolNames = new Set(nestedTools.map(tool => tool.name));
@@ -1205,7 +983,6 @@ export async function runAgent(
   }
 
   const { session } = await runInChildSessionContext(() => createAgentSession(sessionOpts));
-  sessionEventBuses.set(session, childEventBus);
 
   const baseSessionName = agentConfig?.name ?? type;
   session.setSessionName(
@@ -1304,7 +1081,7 @@ export async function runAgent(
   // on counts as this run's output (a fresh session, so usually 0).
   const startLen = session.messages.length;
   try {
-    await promptWithCompactionLifecycle(session, childEventBus, effectivePrompt, options.signal);
+    await session.prompt(effectivePrompt);
   } finally {
     unsubTurns();
     collector.unsubscribe();
@@ -1380,12 +1157,7 @@ export async function resumeAgent(
   });
 
   try {
-    const eventBus = sessionEventBuses.get(session);
-    if (eventBus) {
-      await promptWithCompactionLifecycle(session, eventBus, prompt, options.signal);
-    } else {
-      await session.prompt(prompt);
-    }
+    await session.prompt(prompt);
   } finally {
     collector.unsubscribe();
     unsubEvents();

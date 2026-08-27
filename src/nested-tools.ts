@@ -87,7 +87,12 @@ export interface NestedAgentManager {
     onSpawned?: (id: string) => void,
   ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
-  resume(id: string, prompt: string, signal?: AbortSignal): Promise<AgentRecord | undefined>;
+  resume(
+    id: string,
+    prompt: string,
+    signal?: AbortSignal,
+    options?: { maxTurns?: number },
+  ): Promise<AgentRecord | undefined>;
 }
 
 export interface NestedToolContext {
@@ -100,6 +105,7 @@ export interface NestedToolContext {
   allowedSubagents: "all" | string[];
   /** Root used for agent/config discovery; may differ from the agent's working directory. */
   configCwd: string;
+  defaultMaxTurns?: number;
 }
 
 function textResult(text: string, isError = false) {
@@ -199,7 +205,11 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         ) {
           return textResult(`Retrieve nested agent "${params.resume}" before resuming it.`, true);
         }
-        const resumed = await context.manager.resume(params.resume, params.prompt, signal);
+        const registry = loadRegistry();
+        const maxTurns = params.max_turns
+          ?? getAgentConfigIn(registry, existing.type)?.maxTurns
+          ?? context.defaultMaxTurns;
+        const resumed = await context.manager.resume(params.resume, params.prompt, signal, { maxTurns });
         return resumed
           ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
           : textResult(`Failed to resume nested agent "${params.resume}".`, true);

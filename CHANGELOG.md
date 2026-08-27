@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Explicit `max_turns` values supplied to `Agent` take precedence over frontmatter and configured defaults.** When the call omits a limit, the agent's frontmatter and then the configured or default value apply; `0` remains unlimited.
+- **Managed children use Pi's native context compaction inherited from their `SettingsManager`.** Obsolete context-compact lifecycle coupling and barrier events are no longer part of child execution or completion delivery.
+
 ### Fixed
 - **Activity-card rendering now covers the full interaction lifecycle.** One `Main` card spans each user prompt through its final assistant response, including background-agent continuation; each top-level subagent gets one launch-to-terminal card, with normalized one-line activity and Pi's thinking, working, and tool rows hidden from the TUI.
 
