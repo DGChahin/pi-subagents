@@ -29,6 +29,7 @@ vi.mock("../src/output-file.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { ensureOutputFile, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import type { AgentRecord } from "../src/types.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -82,6 +83,18 @@ function agentIdOf(result: any): string {
   const id = /Agent ID: (\S+)/.exec(resultText(result))?.[1];
   if (!id) throw new Error(`no agent id in result: ${JSON.stringify(result)}`);
   return id;
+}
+
+/** Observe the seeded run's terminal settlement before consuming its output. */
+async function waitForSettled(agentId: string): Promise<void> {
+  const manager = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")] as {
+    getRecord(id: string): AgentRecord | undefined;
+  };
+  const record = manager.getRecord(agentId);
+  expect(record).toBeDefined();
+  if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
+  await record.promise;
+  expect(record.settledRevision).toBe(record.runRevision);
 }
 
 describe("Agent tool — background resume wiring", () => {
@@ -145,6 +158,7 @@ describe("Agent tool — background resume wiring", () => {
       ctx,
     );
     const id = agentIdOf(res);
+    await waitForSettled(id);
     await tools.get("get_subagent_result").execute(
       "consume-spawn",
       { agent_id: id, wait: true },

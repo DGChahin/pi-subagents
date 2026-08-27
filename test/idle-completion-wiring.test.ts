@@ -11,6 +11,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { setOutputTranscriptDefault } from "../src/output-file.js";
+import type { AgentRecord } from "../src/types.js";
 
 interface Harness {
   pi: {
@@ -106,6 +107,26 @@ const flush = async () => {
   await microflush();
   await new Promise(resolve => setImmediate(resolve));
 };
+
+/** Retrieve only after the manager has marked this revision fully settled. */
+async function retrieveSettled(
+  tools: Harness["tools"],
+  agentId: string,
+  toolCallId: string,
+  context: ReturnType<typeof makeCtx>,
+): Promise<Record<string, unknown>> {
+  const manager = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")] as {
+    getRecord(id: string): AgentRecord | undefined;
+  };
+  const record = manager.getRecord(agentId);
+  expect(record).toBeDefined();
+  if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
+  await record.promise;
+  expect(record.settledRevision).toBe(record.runRevision);
+  return tools.get("get_subagent_result")!.execute(
+    toolCallId, { agent_id: agentId, wait: true }, undefined, undefined, context,
+  );
+}
 
 describe("top-level background lifecycle and idle completion delivery", () => {
   let cwd: string;
@@ -255,13 +276,9 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     resolvers.get("batch-a")?.(agentResult("batch-a result"));
     resolvers.get("batch-b")?.(agentResult("batch-b result"));
     await microflush();
-    await harness.tools.get("get_subagent_result")!.execute(
-      "get-batch-a", { agent_id: batchA, wait: true }, undefined, undefined, context,
-    );
+    await retrieveSettled(harness.tools, batchA, "get-batch-a", context);
     await vi.advanceTimersByTimeAsync(100);
-    await harness.tools.get("get_subagent_result")!.execute(
-      "get-batch-b", { agent_id: batchB, wait: true }, undefined, undefined, context,
-    );
+    await retrieveSettled(harness.tools, batchB, "get-batch-b", context);
     await vi.advanceTimersByTimeAsync(200);
 
     const groupA = idFrom(await spawn(harness.tools, "group-a", context));
@@ -269,14 +286,10 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     await vi.advanceTimersByTimeAsync(100);
     resolvers.get("group-a")?.(agentResult("group-a result"));
     await microflush();
-    await harness.tools.get("get_subagent_result")!.execute(
-      "get-group-a", { agent_id: groupA, wait: true }, undefined, undefined, context,
-    );
+    await retrieveSettled(harness.tools, groupA, "get-group-a", context);
     resolvers.get("group-b")?.(agentResult("group-b result"));
     await microflush();
-    await harness.tools.get("get_subagent_result")!.execute(
-      "get-group-b", { agent_id: groupB, wait: true }, undefined, undefined, context,
-    );
+    await retrieveSettled(harness.tools, groupB, "get-group-b", context);
     await vi.advanceTimersByTimeAsync(200);
 
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();

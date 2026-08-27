@@ -18,6 +18,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
+import type { AgentRecord } from "../src/types.js";
 import { addUsage } from "../src/usage.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
 
@@ -47,14 +48,25 @@ const spawn = (tools: Map<string, any>, toolCallId: string | undefined) =>
     ctx(),
   );
 
-const retrieve = (tools: Map<string, any>, started: any, toolCallId = "tc-result") =>
-  tools.get("get_subagent_result").execute(
+/** Retrieve stored output only after this exact top-level revision settles. */
+const retrieve = async (tools: Map<string, any>, started: any, toolCallId = "tc-result") => {
+  const agentId = started.details.agentId;
+  const manager = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")] as {
+    getRecord(id: string): AgentRecord | undefined;
+  };
+  const record = manager.getRecord(agentId);
+  expect(record).toBeDefined();
+  if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
+  await record.promise;
+  expect(record.settledRevision).toBe(record.runRevision);
+  return tools.get("get_subagent_result").execute(
     toolCallId,
-    { agent_id: started.details.agentId, wait: true },
+    { agent_id: agentId, wait: true },
     undefined,
     undefined,
     ctx(),
   );
+};
 
 describe("reporting subagent usage back to the parent session", () => {
   let hermetic: Hermetic;

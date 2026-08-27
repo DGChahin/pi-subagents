@@ -194,6 +194,10 @@ A `direct`-mode start takes the non-tool spawn path shared with the scheduler an
 
 Completion callbacks keep only a short visual preview. Use `get_subagent_result` to retrieve the full stored output.
 
+For top-level agents, `wait: true` is nonblocking for incomplete runs: it returns current status immediately with `terminate: true`, so the parent turn can end. The completion callback arrives later, after settlement and when the parent is idle; retrieve the stored output after that callback. `wait: false` (the default) is an immediate, non-terminating status check. An already-settled retrieval is immediate and consumes the result.
+
+Nested result retrieval semantics are unchanged.
+
 By default, agents stream their full conversation to a per-subagent transcript — a JSON-lines file at `<os-tmpdir>/pi-subagents-<uid>/<cwd>/<session>/tasks/<agent-id>.output` (owner-only `0700`, cleared on reboot). Set `output_transcript: false` on a custom agent to write no transcript path or file for it, or set `outputTranscript: false` in `subagents.json` to make transcripts opt-in for the whole project (frontmatter overrides the project default). This governs **only** the transcript: it is independent of `persist_session` (the pi session on disk), and it does not affect `isolation: worktree` (which commits the agent's work to a git branch) or `memory:` (durable files) — set those accordingly if the goal is to keep a run off disk entirely. Background agent completion notifications render as styled boxes:
 
 ```
@@ -395,10 +399,10 @@ Check status and retrieve results from a background agent.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `agent_id` | string | yes | Agent ID to check |
-| `wait` | boolean | no | Wait for completion |
+| `wait` | boolean | no | For an incomplete top-level run, `true` returns status immediately with `terminate: true`; retrieve after the completion callback. Defaults to `false` (immediate status). |
 | `verbose` | boolean | no | Include full conversation log |
 
-Cancelling a `wait: true` call (for example, with `Esc`) stops only the wait. The background agent keeps running, and its concise completion callback still arrives normally unless another result call consumes it.
+
 
 ### `steer_subagent`
 
@@ -592,7 +596,7 @@ Agent lifecycle events are emitted via `pi.events.emit()` so other extensions ca
 
 Successful background spawn, asynchronous resume, and schedule registration results include `terminate: true`. This lets an all-Agent dispatch batch end the parent run; Pi preserves parallel execution and terminates only after every finalized result in the batch is terminating. Error and rejection results omit termination so the parent can correct them.
 
-Completed results stay in pi-subagents state while the current parent context reports `isIdle() === false`. The extension retries at `agent_settled`; it does not create a Pi pending message to interrupt active work. Each top-level spawn or background resume captures the parent session generation when it is dispatched, before any queue wait. A later queue start preserves that identity, so an old-session completion cannot enter a replacement session and its stored result remains available for explicit retrieval.
+The completion callback for an incomplete top-level result is delivered after the child settles and the parent is idle. Completed results stay in pi-subagents state while the current parent context reports `isIdle() === false`. The extension retries at `agent_settled`; it does not create a Pi pending message to interrupt active work. Each top-level spawn or background resume captures the parent session generation when it is dispatched, before any queue wait. A later queue start preserves that identity, so an old-session completion cannot enter a replacement session and its stored result remains available for explicit retrieval.
 
 `tokens.total` = `input + output + cacheWrite`. `cacheRead` is excluded — each turn's `cacheRead` is the cumulative cached prefix re-read on that one API call, so summing per-message would over-count it as a measure of work done. Use `contextUsage.percent` for current context size.
 

@@ -1,16 +1,8 @@
 /**
- * wait-queued.test.ts — get_subagent_result(wait: true) lifecycle behavior.
- *
- * Queued records have no promise yet (it's created when the queue starts
- * them), so the old `status === "running" && record.promise` condition
- * skipped the wait entirely and returned "still running" — forcing the
- * caller into a poll loop against the concurrency queue.
- *
- * Wiring test through the REAL extension: spawn background agents until one
- * queues, call the real tool with wait:true, drain the queue, and assert the
- * call returns the final result.
+ * Top-level get_subagent_result reports unsettled work immediately. The
+ * completion callback remains the delivery path for the eventual result.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -19,6 +11,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -66,9 +59,41 @@ const flush = async () => {
   await new Promise((r) => setImmediate(r));
 };
 
-/** runAgent mock where each call blocks until we resolve it manually. */
+const timedOut = Symbol("timed out");
+async function promptly<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      promise,
+      new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), 100);
+      }),
+    ]);
+    expect(result).not.toBe(timedOut);
+    if (result === timedOut) throw new Error("operation did not resolve promptly");
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function hasNotification(pi: any, id: string): boolean {
+  return pi.sendMessage.mock.calls.some(
+    ([message]: any[]) => message?.customType === "subagent-notification"
+      && typeof message.content === "string"
+      && message.content.includes(id),
+  );
+}
+
+async function waitForNotification(pi: any, id: string): Promise<void> {
+  for (let i = 0; i < 40 && !hasNotification(pi, id); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** runAgent mock where each call blocks until its resolver is invoked. */
 function deferredRuns() {
-  const resolvers: Array<(v: any) => void> = [];
+  const resolvers: Array<() => void> = [];
   vi.mocked(runAgent).mockImplementation(
     () =>
       new Promise((resolve) => {
@@ -97,145 +122,108 @@ async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; q
   return { id, queued: textOf(r).includes("queued in background") };
 }
 
-describe("get_subagent_result wait:true on a queued agent", () => {
-  it("waits through queue start and returns the result (no 'still running')", async () => {
+let hermetic: Hermetic | undefined;
+
+beforeEach(() => {
+  hermetic = hermeticDir({
+    settings: { maxConcurrent: 1, defaultJoinMode: "async", schedulingEnabled: false, outputTranscript: false },
+  });
+  vi.mocked(runAgent).mockReset();
+});
+
+afterEach(() => {
+  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  hermetic?.restore();
+  hermetic = undefined;
+});
+
+describe("top-level get_subagent_result wait semantics", () => {
+  it("returns a running result promptly and leaves its completion callback armed", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     await lifecycle.get("session_start")?.({}, ctx());
-
     const resolvers = deferredRuns();
-
-    // Spawn until one lands in the queue (concurrency limit is config-dependent).
-    let queuedId: string | undefined;
-    for (let i = 0; i < 20 && !queuedId; i++) {
-      const { id, queued } = await spawnBackground(tools);
-      if (queued) queuedId = id;
-    }
-    expect(queuedId, "expected to hit the concurrency limit within 20 spawns").toBeDefined();
-
-    // wait:true on the QUEUED agent — must not return "still running".
-    const waitPromise = tools
-      .get("get_subagent_result")
-      .execute("tc-wait", { agent_id: queuedId, wait: true }, undefined, undefined, ctx());
-
-    // Drain: resolve running agents until the queued one starts and finishes.
-    let settled = false;
-    void waitPromise.then(() => { settled = true; });
-    for (let i = 0; i < 40 && !settled; i++) {
-      while (resolvers.length > 0) resolvers.shift()!();
-      await flush();
-      await new Promise((r) => setTimeout(r, 100)); // outlive one 250ms poll tick
-    }
-
-    const result = await waitPromise;
-    expect(textOf(result)).toContain("THE-RESULT-PAYLOAD");
-    expect(textOf(result)).not.toContain("still running");
-
-    await new Promise((r) => setTimeout(r, 350));
-    expect(JSON.stringify(pi.sendMessage.mock.calls)).not.toContain(queuedId);
-
-    await lifecycle.get("session_shutdown")?.();
-  }, 20_000);
-
-  it("aborts a running result wait without aborting or consuming the child", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
-    await lifecycle.get("session_start")?.({}, ctx());
-
-    let resolveRun: (() => void) | undefined;
-    let childSignal: AbortSignal | undefined;
-    vi.mocked(runAgent).mockImplementation(
-      (_ctx, _type, _prompt, options) =>
-        new Promise((resolve) => {
-          childSignal = options.signal;
-          resolveRun = () => resolve({
-            responseText: "THE-RESULT-PAYLOAD",
-            session: { dispose: vi.fn() } as any,
-            aborted: false,
-            steered: false,
-          });
-        }),
-    );
-
     const { id } = await spawnBackground(tools);
-    const controller = new AbortController();
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    const waitOutcome = tools
-      .get("get_subagent_result")
-      .execute("tc-wait-abort", { agent_id: id, wait: true }, controller.signal, undefined, ctx())
-      .then(
-        () => "resolved",
-        (error: unknown) => error instanceof Error ? error.name : String(error),
-      );
 
-    controller.abort();
-    const outcome = await Promise.race([
-      waitOutcome,
-      new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 100)),
-    ]);
-    const childWasAborted = childSignal?.aborted;
+    const result = await promptly(
+      tools.get("get_subagent_result").execute(
+        "tc-wait-running", { agent_id: id, wait: true }, undefined, undefined, ctx(),
+      ),
+    );
+    expect(textOf(result)).toContain("Agent is running");
+    expect(result.terminate).toBe(true);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(resolvers).toHaveLength(1);
 
-    resolveRun?.();
+    resolvers.shift()!();
     await flush();
-    await waitOutcome;
-    await new Promise((r) => setTimeout(r, 350));
+    await waitForNotification(pi, id);
+    expect(hasNotification(pi, id)).toBe(true);
 
-    const completedResult = await tools
-      .get("get_subagent_result")
-      .execute("tc-result", { agent_id: id }, undefined, undefined, ctx());
-
-    await lifecycle.get("session_shutdown")?.();
-
-    expect(outcome).toBe("AbortError");
-    expect(childWasAborted).toBe(false);
-    expect(removeListener).toHaveBeenCalledTimes(1);
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    expect(textOf(completedResult)).toContain("THE-RESULT-PAYLOAD");
+    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
-  it("aborts a queued result wait before the agent starts", async () => {
+  it("returns a queued result promptly and delivers its callback after queue drain", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     await lifecycle.get("session_start")?.({}, ctx());
-
     const resolvers = deferredRuns();
-    let queuedId: string | undefined;
-    for (let i = 0; i < 20 && !queuedId; i++) {
-      const { id, queued } = await spawnBackground(tools);
-      if (queued) queuedId = id;
-    }
-    expect(queuedId, "expected to hit the concurrency limit within 20 spawns").toBeDefined();
 
-    const controller = new AbortController();
-    const waitOutcome = tools
-      .get("get_subagent_result")
-      .execute("tc-queued-abort", { agent_id: queuedId, wait: true }, controller.signal, undefined, ctx())
-      .then(
-        () => "resolved",
-        (error: unknown) => error instanceof Error ? error.name : String(error),
-      );
+    const first = await spawnBackground(tools);
+    const queued = await spawnBackground(tools);
+    expect(first.queued).toBe(false);
+    expect(queued.queued).toBe(true);
 
-    controller.abort();
-    const outcome = await Promise.race([
-      waitOutcome,
-      new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 100)),
-    ]);
+    const result = await promptly(
+      tools.get("get_subagent_result").execute(
+        "tc-wait-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx(),
+      ),
+    );
+    expect(textOf(result)).toContain("Agent is queued");
+    expect(result.terminate).toBe(true);
+    expect(hasNotification(pi, queued.id)).toBe(false);
 
-    let completedResult: any;
-    for (let i = 0; i < 40 && !completedResult; i++) {
-      while (resolvers.length > 0) resolvers.shift()!();
-      await flush();
-      const result = await tools
-        .get("get_subagent_result")
-        .execute("tc-queued-result", { agent_id: queuedId }, undefined, undefined, ctx());
-      if (textOf(result).includes("THE-RESULT-PAYLOAD")) completedResult = result;
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    const firstResolver = resolvers.shift();
+    expect(firstResolver).toBeDefined();
+    firstResolver!();
+    await flush();
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    const queuedResolver = resolvers.shift();
+    expect(queuedResolver).toBeDefined();
+    expect(hasNotification(pi, queued.id)).toBe(false);
 
-    await waitOutcome;
-    await lifecycle.get("session_shutdown")?.();
+    queuedResolver!();
+    await flush();
+    await waitForNotification(pi, queued.id);
+    expect(hasNotification(pi, queued.id)).toBe(true);
 
-    expect(outcome).toBe("AbortError");
-    expect(textOf(completedResult)).toContain("THE-RESULT-PAYLOAD");
+    const terminal = await tools.get("get_subagent_result").execute(
+      "tc-read-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx(),
+    );
+    expect(textOf(terminal)).toContain("THE-RESULT-PAYLOAD");
+    expect(terminal.terminate).toBeUndefined();
+
+    await lifecycle.get("session_shutdown")?.({}, ctx());
+  });
+
+  it("keeps wait:false immediate and non-terminating for a running agent", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    await lifecycle.get("session_start")?.({}, ctx());
+    const resolvers = deferredRuns();
+    const { id } = await spawnBackground(tools);
+
+    const result = await promptly(
+      tools.get("get_subagent_result").execute(
+        "tc-poll-running", { agent_id: id, wait: false }, undefined, undefined, ctx(),
+      ),
+    );
+    expect(textOf(result)).toContain("Agent is still running");
+    expect(result.terminate).toBeUndefined();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+
+    resolvers.shift()!();
+    await flush();
+    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 });

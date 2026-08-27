@@ -25,6 +25,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
+import type { AgentRecord } from "../src/types.js";
 import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 function makePi() {
@@ -64,6 +65,18 @@ function ctx() {
 }
 
 const textOf = (r: any): string => r.content[0].text;
+
+/** Observe the manager's terminal settlement before retrieving stored output. */
+async function waitForSettled(agentId: string): Promise<void> {
+  const manager = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")] as {
+    getRecord(id: string): AgentRecord | undefined;
+  };
+  const record = manager.getRecord(agentId);
+  expect(record).toBeDefined();
+  if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
+  await record.promise;
+  expect(record.settledRevision).toBe(record.runRevision);
+}
 
 const settled = (text: string) =>
   vi.mocked(runAgent).mockResolvedValue({
@@ -109,6 +122,7 @@ describe("backgroundByDefault", () => {
     expect(out).toContain("Agent ID:");
     expect(out).not.toContain("THE-PAYLOAD");
 
+    await waitForSettled(started.details.agentId);
     const retrieved = textOf(await tools.get("get_subagent_result").execute(
       "tc-result",
       { agent_id: started.details.agentId, wait: true },

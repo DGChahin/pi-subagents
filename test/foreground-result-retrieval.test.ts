@@ -55,6 +55,11 @@ function ctx() {
 
 const textOf = (result: any): string => result.content[0].text;
 
+const flush = async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+};
+
 async function runBackgroundSteeredAgent(tools: Map<string, any>) {
   vi.mocked(runAgent).mockResolvedValue({
     responseText: "THE-RESULT-PAYLOAD",
@@ -80,7 +85,9 @@ async function runBackgroundSteeredAgent(tools: Map<string, any>) {
   );
   const id = /Agent ID: (\S+)/.exec(textOf(receipt))?.[1];
   expect(id, "background spawn should expose its record id").toBeTruthy();
+  await flush();
   return { receipt, id: id as string };
+
 }
 
 describe("top-level background result identity and foreground rejection", () => {

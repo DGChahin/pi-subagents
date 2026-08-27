@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { abortable } from "./abortable.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
@@ -571,9 +570,9 @@ export default function (pi: ExtensionAPI) {
   const pendingNudges = new Map<string, PendingNudge>();
   const heldCompletions = new Map<string, HeldCompletion>();
   const NUDGE_HOLD_MS = 200;
-  // A queued result wait must observe completion before its held notification
-  // can fire, so successful waits can still suppress that redundant nudge.
-  const QUEUE_WAIT_POLL_MS = Math.floor(NUDGE_HOLD_MS / 4);
+  // Hold completion notifications briefly so terminal retrieval can consume
+  // before delivery; incomplete top-level wait:true returns immediately and its
+  // callback is delivered when the child settles and the parent is idle.
   let currentCtx: ExtensionContext | undefined;
   let sessionGeneration = 0;
   let deliveryInProgress = false;
@@ -2060,7 +2059,7 @@ Terse command-style prompts produce shallow, generic work.
         if (existing.status === "running" || existing.status === "queued") {
           return textResult(
             `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
-            `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
+            `Use steer_subagent to send a message mid-run, or get_subagent_result to check status; the completion callback arrives after settlement.`,
           );
         }
         if (existing.settledRevision !== existing.runRevision) {
@@ -2400,7 +2399,7 @@ Terse command-style prompts produce shallow, generic work.
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve a background agent's full stored result — its completion callback is intentionally concise. Use the agent ID returned by Agent.",
+      "Check status and retrieve a background agent's full result. For an incomplete top-level run, `wait: true` returns immediately with `terminate: true`; the completion callback arrives after settlement, then retrieve the result.",
     promptSnippet: "Check status and retrieve results from a background agent",
     parameters: Type.Object({
       agent_id: Type.String({
@@ -2408,7 +2407,7 @@ Terse command-style prompts produce shallow, generic work.
       }),
       wait: Type.Optional(
         Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
+          description: "For an incomplete top-level run, `true` returns immediately with `terminate: true`; retrieve the result after its completion callback. Defaults to `false`, which returns an immediate, non-terminating status.",
         }),
       ),
       verbose: Type.Optional(
@@ -2418,34 +2417,16 @@ Terse command-style prompts produce shallow, generic work.
       ),
     }),
     ...hiddenToolRenderers,
-    execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
       if (!record || record.parentAgentId) {
         return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
       }
       const revision = record.runRevision;
 
-      // Wait for completion if requested. Cancellation stops only this tool
-      // call; the background agent keeps running and remains unconsumed so its
-      // completion notification can still be delivered.
-      // Queued agents have no promise yet (it's created when the queue starts
-      // them), so poll until they leave the queue, then await like a running one.
-      if (
-        params.wait
-        && (
-          record.status === "running"
-          || record.status === "queued"
-          || record.settledRevision !== revision
-        )
-      ) {
-        while (record.status === "queued") {
-          await abortable(
-            new Promise<void>((resolve) => setTimeout(resolve, QUEUE_WAIT_POLL_MS)),
-            signal,
-          );
-        }
-        if (record.promise) await abortable(record.promise, signal);
-      }
+      // Top-level wait:true is nonblocking: report current status, return
+      // terminate:true so the parent turn can end, and leave the completion
+      // callback armed for later delivery. wait:false is an immediate status check.
 
       const isSettled = record.runRevision === revision && record.settledRevision === revision;
       const displayName = getDisplayName(record.type);
@@ -2468,9 +2449,11 @@ Terse command-style prompts produce shallow, generic work.
         `Description: ${record.description}\n\n`;
 
       if (!isSettled) {
-        output += record.status === "stopped"
-          ? "Agent is stopping. Its current revision has not settled yet. Use wait: true or check back later."
-          : "Agent is still running. Use wait: true or check back later.";
+        output += params.wait
+          ? `Agent is ${record.status === "stopped" ? "stopping" : record.status}. This call returns immediately with terminate:true so the parent turn can end. The completion callback arrives after settlement; retrieve the result after it arrives.`
+          : record.status === "stopped"
+            ? "Agent is stopping; its current revision is not settled. This is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives."
+            : `Agent is still running; this is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives.`;
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
@@ -2495,7 +2478,7 @@ Terse command-style prompts produce shallow, generic work.
         }
       }
 
-      return textResult(output);
+      return textResult(output, undefined, params.wait === true && !isSettled);
     },
   }));
 

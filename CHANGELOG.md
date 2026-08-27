@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Activity-card rendering now covers the full interaction lifecycle.** One `Main` card spans each user prompt through its final assistant response, including background-agent continuation; each top-level subagent gets one launch-to-terminal card, with normalized one-line activity and Pi's thinking, working, and tool rows hidden from the TUI.
+- **Fixed top-level `get_subagent_result(wait: true)` blocking on incomplete agents.** It now returns status immediately with `terminate: true`; the completion callback arrives after settlement, and the result can be retrieved after that callback.
 
 ## [0.18.0] - 2026-08-20
 
