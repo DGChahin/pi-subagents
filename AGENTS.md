@@ -25,16 +25,20 @@
 
 ## Commands
 
+- Install the exact npm dependency set with `npm ci`. On the managed development host, the global pre-commit dispatcher invokes `bin/pre-commit-check` when owned `src/**/*.ts` or `test/**/*.ts` files are staged.
+- `bin/pre-commit-check` runs staged Biome lint/import-sorting and formatting checks only. It never fixes, stages, installs, tests, builds, audits, or contacts the network. Fix failures with `npm run lint:fix` or `npm run format:fix`, stage the result, and retry.
 - After code changes (not docs), run the full check suite and fix all errors and warnings:
   ```bash
-  npm run lint        # biome
-  npm run typecheck   # tsc --noEmit
-  npm run test        # vitest run
+  npm run lint          # check-only Biome lint and import sorting
+  npm run format:check  # check-only Biome formatting for src/ and test/
+  npm run typecheck     # tsc --noEmit
+  npm run test          # vitest run
   ```
-- `npm run lint:fix` auto-fixes most style issues.
 - `npm run test` runs the whole suite, including `*-e2e.test.ts` files. To iterate on a single file, run it directly: `npx vitest run test/<file>.test.ts`.
 - If you create or modify a test file, run it and iterate on the test or implementation until it passes.
 - `npm run build` compiles with `tsc`; run it only when verifying the build output or when requested.
+- Before opening a pull request from this fork, commit all changes and run `bin/pre-pr` from the clean feature worktree. It defaults to `origin/main`; pass `upstream/master` explicitly when preparing an upstream contribution. The gate runs lint, formatting, complexity, typecheck, Vitest, build, and the offline faux e2e suite. Mutation is not applicable to this Pi extension/TUI.
+- A pre-PR setup failure must be corrected with `npm ci` or the named host setup guidance. A quality failure remains blocking; use the reported native fix command and rerun the gate. The gate never publishes and never enables live-login e2e.
 - For ad-hoc scripts, write them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 
 ## Git

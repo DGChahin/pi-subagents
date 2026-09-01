@@ -41,17 +41,21 @@ For security issues, do **not** open a public issue — see [SECURITY.md](SECURI
 For anything beyond a trivial fix, open an issue first so we can agree on the
 approach before you invest the time.
 
+Install the locked npm dependencies with `npm ci`. On the managed development host, the global pre-commit hook dispatches to `bin/pre-commit-check`, which runs check-only Biome lint/import-sorting and formatting for staged owned TypeScript files. It does not rewrite or stage files. Use `npm run lint:fix` or `npm run format:fix`, then stage and retry when it reports a failure.
+
 Make sure the full check suite passes locally:
 
 ```bash
-npm run lint        # biome
-npm run typecheck   # tsc --noEmit
-npm run test        # vitest
-npm run build       # tsc
+npm run lint          # check-only Biome lint and import sorting
+npm run format:check  # check-only Biome formatting
+npm run typecheck     # tsc --noEmit
+npm run test          # vitest
+npm run build         # tsc
 ```
 
-All four must pass. `npm run lint:fix` will auto-fix most style issues, and
-`npm run test:e2e` runs the end-to-end suite if your change touches that surface.
+Before opening a pull request from this fork, commit all changes and run `bin/pre-pr` from the clean feature worktree. Its default base is `origin/main`; pass `upstream/master` explicitly for an upstream contribution. The gate runs the checks above plus whole-file complexity audit and the offline faux e2e suite. Live-login e2e, publishing, and mutation testing are excluded; mutation is not applicable to this Pi extension/TUI.
+
+If setup is missing, rerun `npm ci` or follow the host guidance printed by the gate. Fix the first reported native check and rerun `bin/pre-pr`; the gate never installs dependencies or publishes.
 
 Other guidelines:
 
