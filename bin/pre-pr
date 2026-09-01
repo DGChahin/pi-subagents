@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: bin/pre-pr [BASE_REF]" >&2
+  exit 2
+}
+
+fail() {
+  printf 'pre-pr: %s\n' "$1" >&2
+  exit 1
+}
+
+if [ "$#" -gt 1 ]; then
+  usage
+fi
+if [ "$#" -eq 1 ] && [ -z "$1" ]; then
+  usage
+fi
+
+base_ref=${1:-origin/main}
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+expected_root=$(dirname -- "$script_dir")
+repository_root=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not inside the pi-subagents repository"
+repository_root=$(CDPATH= cd -- "$repository_root" && pwd -P)
+current_dir=$(pwd -P)
+
+if [ "$repository_root" != "$expected_root" ]; then
+  fail "gate does not belong to this repository root"
+fi
+if [ "$current_dir" != "$repository_root" ]; then
+  fail "run bin/pre-pr from the repository root"
+fi
+
+branch=$(git symbolic-ref --quiet --short HEAD) || fail "HEAD must be attached to a feature branch"
+if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+  fail "refusing to run on target branch '$branch'"
+fi
+status_output=$(git status --porcelain --untracked-files=all) || fail "could not inspect worktree status"
+if [ -n "$status_output" ]; then
+  fail "worktree must be clean, including untracked files"
+fi
+if ! git rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null; then
+  fail "base ref '$base_ref' does not resolve to a commit"
+fi
+if ! merge_base=$(git merge-base "$base_ref" HEAD); then
+  fail "base ref '$base_ref' has no merge base with HEAD"
+fi
+if git diff --quiet "$merge_base" HEAD; then
+  fail "feature branch has no committed diff from '$base_ref'"
+else
+  diff_status=$?
+  if [ "$diff_status" -ne 1 ]; then
+    fail "could not inspect the committed diff from '$base_ref'"
+  fi
+fi
+
+for required_file in package.json package-lock.json biome.json tsconfig.json vitest.config.ts; do
+  if [ ! -f "$required_file" ]; then
+    fail "required file '$required_file' is missing"
+  fi
+done
+for command_name in node npm code-audit; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    fail "required command '$command_name' is missing"
+  fi
+done
+
+node_version=$(node --version)
+node_version=${node_version#v}
+node_major=${node_version%%.*}
+if ! [[ "$node_major" =~ ^[0-9]+$ ]]; then
+  fail "could not parse Node version '$node_version'"
+fi
+if [ "$node_major" -lt 22 ]; then
+  fail "Node >=22 is required; found $node_version"
+fi
+
+for local_tool in biome tsc vitest; do
+  if [ ! -x "node_modules/.bin/$local_tool" ]; then
+    fail "local $local_tool is missing; run 'npm ci'"
+  fi
+done
+verify_locked_spec() {
+  local package_name=$1
+  local display_name=$2
+  node -e 'const manifest = require("./package.json"); const root = require("./package-lock.json").packages?.[""]; const fields = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]; const field = fields.find((candidate) => Object.hasOwn(manifest[candidate] ?? {}, process.argv[1])); if (!field || !root || manifest[field][process.argv[1]] !== root[field]?.[process.argv[1]]) process.exit(1);' "$package_name" || fail "package.json and package-lock.json disagree on the $display_name dependency spec; refresh package-lock.json"
+}
+
+verify_locked_spec '@biomejs/biome' Biome
+verify_locked_spec typescript TypeScript
+verify_locked_spec vitest Vitest
+
+locked_version() {
+  local package_name=$1
+  local display_name=$2
+  node -e 'const lock = require("./package-lock.json"); const entry = lock.packages?.[`node_modules/${process.argv[1]}`]; if (!entry || typeof entry.version !== "string" || entry.version.length === 0) process.exit(1); process.stdout.write(entry.version);' "$package_name" || fail "cannot read the locked $display_name version"
+}
+
+expected_biome_version=$(locked_version '@biomejs/biome' Biome)
+biome_version=$(node_modules/.bin/biome --version) || fail "could not read the installed Biome version; run 'npm ci'"
+biome_version=${biome_version#Version: }
+if [ "$biome_version" != "$expected_biome_version" ]; then
+  fail "Biome $expected_biome_version is required by package-lock.json; found $biome_version; run 'npm ci'"
+fi
+
+expected_typescript_version=$(locked_version typescript TypeScript)
+typescript_version=$(node_modules/.bin/tsc --version) || fail "could not read the installed TypeScript version; run 'npm ci'"
+typescript_version=${typescript_version#Version }
+if [ "$typescript_version" != "$expected_typescript_version" ]; then
+  fail "TypeScript $expected_typescript_version is required by package-lock.json; found $typescript_version; run 'npm ci'"
+fi
+
+expected_vitest_version=$(locked_version vitest Vitest)
+vitest_version=$(node_modules/.bin/vitest --version) || fail "could not read the installed Vitest version; run 'npm ci'"
+vitest_version=${vitest_version#vitest/}
+vitest_version=${vitest_version%% *}
+if [ "$vitest_version" != "$expected_vitest_version" ]; then
+  fail "Vitest $expected_vitest_version is required by package-lock.json; found $vitest_version; run 'npm ci'"
+fi
+
+echo "pre-pr: base $base_ref"
+echo "pre-pr: lint"
+npm run lint
+
+echo "pre-pr: format check"
+npm run format:check
+
+echo "pre-pr: complexity audit"
+code-audit --base "$base_ref"
+
+echo "pre-pr: typecheck"
+npm run typecheck
+
+echo "pre-pr: Vitest"
+npm run test
+
+echo "pre-pr: build"
+npm run build
+
+echo "pre-pr: offline faux e2e"
+PI_E2E_LIVE=0 npm run test:e2e
+
+echo "pre-pr: mutation not applicable (Pi extension/TUI)"
+echo "pre-pr: passed"

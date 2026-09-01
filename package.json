@@ -40,10 +40,11 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run e2e --reporter=verbose",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint src/ test/",
-    "lint:fix": "biome lint --write src/ test/",
+    "lint": "biome check --formatter-enabled=false src/ test/",
+    "lint:fix": "biome check --formatter-enabled=false --write src/ test/",
     "format:check": "biome format src/ test/",
     "format:fix": "biome format --write src/ test/",
+    "test:gates": "bash test/gates.test.sh",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {

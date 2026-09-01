@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'pre-commit check: %s\n' "$1" >&2
+  exit 1
+}
+
+if [ "$#" -ne 0 ]; then
+  echo "usage: bin/pre-commit-check" >&2
+  exit 2
+fi
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+expected_root=$(dirname -- "$script_dir")
+repository_root=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not inside the pi-subagents repository"
+repository_root=$(CDPATH= cd -- "$repository_root" && pwd -P)
+
+if [ "$repository_root" != "$expected_root" ]; then
+  fail "adapter does not belong to this repository root"
+fi
+
+temporary_root=$(mktemp -d "${TMPDIR:-/tmp}/pi-subagents-pre-commit.XXXXXX") || fail "could not create a temporary index checkout"
+trap 'rm -rf "$temporary_root"' EXIT
+
+if ! git diff --cached --name-only --diff-filter=ACMR -z -- ':(glob)src/**/*.ts' ':(glob)test/**/*.ts' >"$temporary_root/staged-files"; then
+  fail "could not inspect staged source and test files"
+fi
+mapfile -d '' staged_files <"$temporary_root/staged-files"
+
+if [ "${#staged_files[@]}" -eq 0 ]; then
+  echo "pre-commit check: no relevant staged source or test files"
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  fail "Node is missing; run 'npm ci' with the repository's supported Node version"
+fi
+biome="$repository_root/node_modules/.bin/biome"
+if [ ! -x "$biome" ]; then
+  fail "local Biome is missing; run 'npm ci'"
+fi
+
+materialize_index_blob() {
+  local staged_file=$1
+  local object_id
+  local materialized_file
+
+  object_id=$(git ls-files --format='%(objectname)' -- "$staged_file") || fail "could not inspect the staged blob for '$staged_file'"
+  if ! [[ "$object_id" =~ ^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$ ]]; then
+    fail "could not identify exactly one staged blob for '$staged_file'"
+  fi
+  materialized_file="$temporary_root/$staged_file"
+  if ! mkdir -p "$(dirname -- "$materialized_file")"; then
+    fail "could not materialize the staged path '$staged_file'"
+  fi
+  if ! git cat-file blob "$object_id" >"$materialized_file"; then
+    fail "could not materialize the staged blob for '$staged_file'"
+  fi
+}
+
+materialize_index_blob biome.json
+materialize_index_blob package-lock.json
+for staged_file in "${staged_files[@]}"; do
+  materialize_index_blob "$staged_file"
+done
+
+cd "$temporary_root"
+
+expected_biome_version=$(node -e 'const lock = require("./package-lock.json"); const entry = lock.packages?.["node_modules/@biomejs/biome"]; if (!entry || typeof entry.version !== "string" || entry.version.length === 0) process.exit(1); process.stdout.write(entry.version);') || fail "cannot read the staged locked Biome version"
+biome_version=$("$biome" --version) || fail "could not read the installed Biome version; run 'npm ci'"
+biome_version=${biome_version#Version: }
+if [ "$biome_version" != "$expected_biome_version" ]; then
+  fail "Biome $expected_biome_version is required by the staged package-lock.json; found $biome_version; run 'npm ci'"
+fi
+
+echo "pre-commit check: Biome check"
+if ! "$biome" check --formatter-enabled=false --no-errors-on-unmatched "${staged_files[@]}"; then
+  fail "lint or import sorting failed; fix with 'npm run lint:fix'"
+fi
+
+echo "pre-commit check: Biome format check"
+if ! "$biome" format --no-errors-on-unmatched "${staged_files[@]}"; then
+  fail "formatting failed; fix with 'npm run format:fix'"
+fi
+
+echo "pre-commit check: passed"
