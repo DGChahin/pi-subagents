@@ -79,7 +79,7 @@ describe("AgentManager — record GC", () => {
     await vi.advanceTimersByTimeAsync(TICK);
 
     expect(manager.getRecord(id)).toBeUndefined();
-    expect(manager.listAgents().map(a => a.id)).not.toContain(id);
+    expect(manager.listAgents().map((a) => a.id)).not.toContain(id);
     expect(dispose).toHaveBeenCalled();
   });
 
@@ -192,7 +192,12 @@ describe("AgentManager — tombstones outliving the GC", () => {
     const resolved = manager.resolveMention("explore");
     expect(resolved?.kind).toBe("tombstone");
     expect(resolved).toMatchObject({
-      entry: { handle: "explore", type: "Explore", description: "audit the RPC path", sessionFile: "/sessions/explore.jsonl" },
+      entry: {
+        handle: "explore",
+        type: "Explore",
+        description: "audit the RPC path",
+        sessionFile: "/sessions/explore.jsonl",
+      },
     });
   });
 

@@ -34,7 +34,9 @@ async function withUnhandledRejectionSpy(fn: () => Promise<void>): Promise<unkno
   const seen: unknown[] = [];
   const prior = process.listeners("unhandledRejection");
   process.removeAllListeners("unhandledRejection");
-  const capture = (reason: unknown) => { seen.push(reason); };
+  const capture = (reason: unknown) => {
+    seen.push(reason);
+  };
   process.on("unhandledRejection", capture);
   try {
     await fn();
@@ -61,8 +63,7 @@ describe("abortable", () => {
   it("rejects immediately with the signal's reason when already aborted", async () => {
     const controller = new AbortController();
     controller.abort(new Error("gone before we started"));
-    await expect(abortable(new Promise(() => {}), controller.signal))
-      .rejects.toThrow("gone before we started");
+    await expect(abortable(new Promise(() => {}), controller.signal)).rejects.toThrow("gone before we started");
   });
 
   it("resolves normally when the signal never fires", async () => {
@@ -72,8 +73,7 @@ describe("abortable", () => {
 
   it("propagates a rejection from the wrapped promise", async () => {
     const controller = new AbortController();
-    await expect(abortable(Promise.reject(new Error("work failed")), controller.signal))
-      .rejects.toThrow("work failed");
+    await expect(abortable(Promise.reject(new Error("work failed")), controller.signal)).rejects.toThrow("work failed");
   });
 
   it("rejects with the abort reason when the signal fires mid-wait", async () => {
@@ -91,7 +91,9 @@ describe("abortable", () => {
     const unhandled = await withUnhandledRejectionSpy(async () => {
       const controller = new AbortController();
       let failChild: ((e: unknown) => void) | undefined;
-      const childWork = new Promise((_resolve, reject) => { failChild = reject; });
+      const childWork = new Promise((_resolve, reject) => {
+        failChild = reject;
+      });
 
       const pending = abortable(childWork, controller.signal);
       controller.abort(new Error("stopped waiting"));
@@ -107,7 +109,9 @@ describe("abortable", () => {
   it("absorbs a late RESOLUTION of the wrapped promise after an abort", async () => {
     const controller = new AbortController();
     let finishChild: ((v: string) => void) | undefined;
-    const childWork = new Promise<string>((resolve) => { finishChild = resolve; });
+    const childWork = new Promise<string>((resolve) => {
+      finishChild = resolve;
+    });
 
     const pending = abortable(childWork, controller.signal);
     controller.abort(new Error("stopped waiting"));

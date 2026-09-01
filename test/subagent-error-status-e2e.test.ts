@@ -12,23 +12,14 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  agentCall,
-  type PrintModeRun,
-  routeBySession,
-  runPrintMode,
-} from "./helpers/print-mode-runner.js";
+import { agentCall, type PrintModeRun, routeBySession, runPrintMode } from "./helpers/print-mode-runner.js";
 
 /** Full stored output fetched by the parent after the completion callback. */
 function subagentResult(session: AgentSession): string {
-  const message = [...session.messages].reverse().find(
-    (item) =>
-      item.role === "toolResult" &&
-      (item as { toolName?: string }).toolName === "get_subagent_result",
-  );
-  return ((message?.content ?? []) as Array<{ text?: string }>)
-    .map((block) => block.text ?? "")
-    .join("");
+  const message = [...session.messages]
+    .reverse()
+    .find((item) => item.role === "toolResult" && (item as { toolName?: string }).toolName === "get_subagent_result");
+  return ((message?.content ?? []) as Array<{ text?: string }>).map((block) => block.text ?? "").join("");
 }
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -74,10 +65,7 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
           // provider error with zero content.
           return hasToolResult
             ? fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL })
-            : fauxAssistantMessage([
-                fauxText("EARLIER-PARTIAL-TEXT"),
-                fauxToolCall("bash", { command: "echo hi" }),
-              ]);
+            : fauxAssistantMessage([fauxText("EARLIER-PARTIAL-TEXT"), fauxToolCall("bash", { command: "echo hi" })]);
         },
       }),
       live: false,

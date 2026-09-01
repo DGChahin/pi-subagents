@@ -219,7 +219,13 @@ describe("streamToOutputFile", () => {
       { role: "user", content: "summary" },
       { role: "assistant", content: [{ type: "text", text: "err" }], stopReason: "error" },
     ]);
-    session.fire({ type: "compaction_end", reason: "overflow", aborted: false, result: { summary: "s" }, willRetry: true });
+    session.fire({
+      type: "compaction_end",
+      reason: "overflow",
+      aborted: false,
+      result: { summary: "s" },
+      willRetry: true,
+    });
     session.replaceAll([{ role: "user", content: "summary" }]); // the post-emit trim
     await microtask();
 

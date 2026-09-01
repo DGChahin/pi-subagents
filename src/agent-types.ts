@@ -28,10 +28,14 @@ const agents = new Map<string, AgentConfig>();
 let disableDefaults = false;
 
 /** Check whether default agents are disabled. */
-export function isDefaultsDisabled(): boolean { return disableDefaults; }
+export function isDefaultsDisabled(): boolean {
+  return disableDefaults;
+}
 
 /** Set whether default agents are disabled. */
-export function setDefaultsDisabled(b: boolean): void { disableDefaults = b; }
+export function setDefaultsDisabled(b: boolean): void {
+  disableDefaults = b;
+}
 
 /** `fallbackSubagent` value that disables the fallback entirely (strict dispatch). */
 export const NO_FALLBACK = "none";
@@ -48,10 +52,14 @@ export const NO_FALLBACK = "none";
 let fallbackSubagent: string | undefined;
 
 /** Get the configured fallback agent type. undefined = general-purpose. */
-export function getFallbackSubagent(): string | undefined { return fallbackSubagent; }
+export function getFallbackSubagent(): string | undefined {
+  return fallbackSubagent;
+}
 
 /** Set the configured fallback agent type. undefined = general-purpose. */
-export function setFallbackSubagent(v: string | undefined): void { fallbackSubagent = v; }
+export function setFallbackSubagent(v: string | undefined): void {
+  fallbackSubagent = v;
+}
 
 /**
  * Build a registry map: DEFAULT_AGENTS first (unless disabled via settings),
@@ -115,9 +123,7 @@ export function isValidTypeIn(registry: Map<string, AgentConfig>, type: string):
 
 /** Get all enabled type names in a registry (for spawning and tool descriptions). */
 export function getAvailableTypesIn(registry: Map<string, AgentConfig>): string[] {
-  return [...registry.entries()]
-    .filter(([_, config]) => config.enabled !== false)
-    .map(([name]) => name);
+  return [...registry.entries()].filter(([_, config]) => config.enabled !== false).map(([name]) => name);
 }
 
 /**
@@ -130,7 +136,7 @@ export function getAvailableTypesIn(registry: Map<string, AgentConfig>): string[
 function resolveUnambiguousKeyIn(registry: Map<string, AgentConfig>, name: string): string | undefined {
   if (registry.has(name)) return name;
   const lower = name.toLowerCase();
-  const matches = [...registry.keys()].filter(key => key.toLowerCase() === lower);
+  const matches = [...registry.keys()].filter((key) => key.toLowerCase() === lower);
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -140,10 +146,7 @@ function resolveUnambiguousKeyIn(registry: Map<string, AgentConfig>, name: strin
  * between case-variants. Nested delegation resolves with this directly, since
  * "unknown types are rejected rather than falling back" is its own contract.
  */
-export function resolveEnabledTypeIn(
-  registry: Map<string, AgentConfig>,
-  requested: unknown,
-): string | undefined {
+export function resolveEnabledTypeIn(registry: Map<string, AgentConfig>, requested: unknown): string | undefined {
   const raw = typeof requested === "string" ? requested.trim() : "";
   if (!raw) return undefined;
   const key = resolveUnambiguousKeyIn(registry, raw);
@@ -171,10 +174,7 @@ export type SpawnTypeResolution =
  * calling (the Agent tool already does, per spawn). Reloading here would mean
  * importing custom-agents.ts, which imports this module.
  */
-export function resolveSpawnTypeIn(
-  registry: Map<string, AgentConfig>,
-  requested: unknown,
-): SpawnTypeResolution {
+export function resolveSpawnTypeIn(registry: Map<string, AgentConfig>, requested: unknown): SpawnTypeResolution {
   const raw = typeof requested === "string" ? requested.trim() : "";
   const available = () => getAvailableTypesIn(registry).join(", ") || "(none)";
 
@@ -245,16 +245,12 @@ export function getAllTypes(): string[] {
 
 /** Get names of default agents currently in the registry. */
 export function getDefaultAgentNames(): string[] {
-  return [...agents.entries()]
-    .filter(([_, config]) => config.isDefault === true)
-    .map(([name]) => name);
+  return [...agents.entries()].filter(([_, config]) => config.isDefault === true).map(([name]) => name);
 }
 
 /** Get names of user-defined agents (non-defaults) currently in the registry. */
 export function getUserAgentNames(): string[] {
-  return [...agents.entries()]
-    .filter(([_, config]) => config.isDefault !== true)
-    .map(([name]) => name);
+  return [...agents.entries()].filter(([_, config]) => config.isDefault !== true).map(([name]) => name);
 }
 
 /** Check if a type is valid and enabled (case-insensitive). */
@@ -269,7 +265,7 @@ const MEMORY_TOOL_NAMES = ["read", "write", "edit"];
  * Get memory tool names (read/write/edit) not already in the provided set.
  */
 export function getMemoryToolNames(existingToolNames: Set<string>): string[] {
-  return MEMORY_TOOL_NAMES.filter(n => !existingToolNames.has(n));
+  return MEMORY_TOOL_NAMES.filter((n) => !existingToolNames.has(n));
 }
 
 /** Tool names needed for read-only memory access. */
@@ -279,7 +275,7 @@ const READONLY_MEMORY_TOOL_NAMES = ["read"];
  * Get read-only memory tool names not already in the provided set.
  */
 export function getReadOnlyMemoryToolNames(existingToolNames: Set<string>): string[] {
-  return READONLY_MEMORY_TOOL_NAMES.filter(n => !existingToolNames.has(n));
+  return READONLY_MEMORY_TOOL_NAMES.filter((n) => !existingToolNames.has(n));
 }
 
 /** Get built-in tool names for a type (case-insensitive). */
@@ -343,4 +339,3 @@ export function getConfig(type: string): {
     promptMode: "append",
   };
 }
-

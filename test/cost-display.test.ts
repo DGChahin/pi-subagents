@@ -32,11 +32,15 @@ function runSpending(cost: number) {
 }
 
 const spawn = (tools: Map<string, any>) =>
-  tools.get("Agent").execute(
-    "tc-1",
-    { prompt: "go", description: "spend", subagent_type: "general-purpose" },
-    undefined, undefined, ctx(),
-  );
+  tools
+    .get("Agent")
+    .execute(
+      "tc-1",
+      { prompt: "go", description: "spend", subagent_type: "general-purpose" },
+      undefined,
+      undefined,
+      ctx(),
+    );
 
 describe("cost display", () => {
   let hermetic: Hermetic;
@@ -70,9 +74,11 @@ describe("cost display", () => {
       runSpending(COST);
       const started = await spawn(tools);
 
-      const text = textOf(await tools.get("get_subagent_result").execute(
-        "tc-2", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx(),
-      ));
+      const text = textOf(
+        await tools
+          .get("get_subagent_result")
+          .execute("tc-2", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx()),
+      );
 
       // Pipe-separated `Label: value` fields, matching its neighbours.
       expect(text).toContain("Cost: ~$0.0123");
@@ -83,9 +89,11 @@ describe("cost display", () => {
       runSpending(0);
       const started = await spawn(tools);
 
-      const text = textOf(await tools.get("get_subagent_result").execute(
-        "tc-2", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx(),
-      ));
+      const text = textOf(
+        await tools
+          .get("get_subagent_result")
+          .execute("tc-2", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx()),
+      );
 
       expect(text).not.toContain("Cost:");
     });
@@ -165,8 +173,15 @@ describe("cost display", () => {
     }
 
     const agent = (description: string, totalTokens: number, totalCost: number) => ({
-      id: description, description, status: "completed", toolUses: 1, turnCount: 1,
-      totalTokens, totalCost, durationMs: 1000, resultPreview: "done",
+      id: description,
+      description,
+      status: "completed",
+      toolUses: 1,
+      turnCount: 1,
+      totalTokens,
+      totalCost,
+      durationMs: 1000,
+      resultPreview: "done",
     });
 
     it("totals a group, so nobody adds four figures by hand", () => {

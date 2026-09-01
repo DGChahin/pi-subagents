@@ -26,13 +26,7 @@ import {
   writeInitialEntry,
 } from "./output-file.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
-import type {
-  AgentConfig,
-  AgentInvocation,
-  AgentRecord,
-  IsolationMode,
-  ThinkingLevel,
-} from "./types.js";
+import type { AgentConfig, AgentInvocation, AgentRecord, IsolationMode, ThinkingLevel } from "./types.js";
 import { addUsage, type UsageDelta } from "./usage.js";
 import { isWorktreeIsolationEnabled } from "./worktree.js";
 
@@ -44,8 +38,12 @@ import { isWorktreeIsolationEnabled } from "./worktree.js";
  */
 let maxSubagentDepth = 2;
 
-export function getMaxSubagentDepth(): number { return maxSubagentDepth; }
-export function setMaxSubagentDepth(n: number): void { maxSubagentDepth = Math.max(0, Math.floor(n)); }
+export function getMaxSubagentDepth(): number {
+  return maxSubagentDepth;
+}
+export function setMaxSubagentDepth(n: number): void {
+  maxSubagentDepth = Math.max(0, Math.floor(n));
+}
 
 const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"] as const;
 
@@ -70,13 +68,7 @@ interface NestedSpawnOptions {
 }
 
 export interface NestedAgentManager {
-  spawn(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: string,
-    prompt: string,
-    options: NestedSpawnOptions,
-  ): string;
+  spawn(pi: ExtensionAPI, ctx: ExtensionContext, type: string, prompt: string, options: NestedSpawnOptions): string;
   spawnAndWait(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
@@ -143,9 +135,7 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // this in its result headline; a nested result has no headline, so the note
   // leads — appended, it would look like part of the child's own output.
   const text = record.result?.trim() || record.error?.trim() || "No output.";
-  const note = position === "inline"
-    ? getForegroundOutcomeNote(record.status)
-    : getStatusNote(record.status);
+  const note = position === "inline" ? getForegroundOutcomeNote(record.status) : getStatusNote(record.status);
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 
@@ -158,10 +148,10 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
   const allowedTypesIn = (registry: Map<string, AgentConfig>): Set<string> | undefined =>
     context.allowedSubagents === "all"
       ? undefined
-      : new Set(context.allowedSubagents.map(name => resolveTypeIn(registry, name) ?? name));
+      : new Set(context.allowedSubagents.map((name) => resolveTypeIn(registry, name) ?? name));
   const availableIn = (registry: Map<string, AgentConfig>): string[] => {
     const allowed = allowedTypesIn(registry);
-    return getAvailableTypesIn(registry).filter(name => allowed === undefined || allowed.has(name));
+    return getAvailableTypesIn(registry).filter((name) => allowed === undefined || allowed.has(name));
   };
 
   const agentTool = defineTool({
@@ -173,13 +163,16 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     parameters: Type.Object({
       prompt: Type.String({ description: "Self-contained task for the nested agent." }),
       description: Type.String({ description: "Short 3-5 word task description." }),
-      subagent_type: Type.String({ description: `Allowed nested agent type. Available: ${availableIn(loadRegistry()).join(", ") || "none"}.` }),
+      subagent_type: Type.String({
+        description: `Allowed nested agent type. Available: ${availableIn(loadRegistry()).join(", ") || "none"}.`,
+      }),
       model: Type.Optional(Type.String({ description: "Optional provider/model override." })),
       thinking: Type.Optional(Type.String({ description: "Optional thinking level." })),
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true only for work you will collect later with get_subagent_result; a detached child is stopped when you finish.",
+          description:
+            "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true only for work you will collect later with get_subagent_result; a detached child is stopped when you finish.",
         }),
       ),
       resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
@@ -199,16 +192,12 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (existing.settledRevision !== existing.runRevision) {
           return textResult(`Nested agent "${params.resume}" is still settling.`, true);
         }
-        if (
-          existing.resultConsumed !== true
-          || existing.pendingDeliveryRevision === existing.runRevision
-        ) {
+        if (existing.resultConsumed !== true || existing.pendingDeliveryRevision === existing.runRevision) {
           return textResult(`Retrieve nested agent "${params.resume}" before resuming it.`, true);
         }
         const registry = loadRegistry();
-        const maxTurns = params.max_turns
-          ?? getAgentConfigIn(registry, existing.type)?.maxTurns
-          ?? context.defaultMaxTurns;
+        const maxTurns =
+          params.max_turns ?? getAgentConfigIn(registry, existing.type)?.maxTurns ?? context.defaultMaxTurns;
         const resumed = await context.manager.resume(params.resume, params.prompt, signal, { maxTurns });
         return resumed
           ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
@@ -405,24 +394,20 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // stays unconsumed. Queued records have no promise until the manager starts
       // them, so poll — abortably — until they leave the queue, then await.
       if (
-        params.wait
-        && (
-          record.status === "queued"
-          || record.status === "running"
-          || record.settledRevision !== revision
-        )
+        params.wait &&
+        (record.status === "queued" || record.status === "running" || record.settledRevision !== revision)
       ) {
         while (record.status === "queued") {
-          await abortable(new Promise<void>(resolve => setTimeout(resolve, 250)), signal);
+          await abortable(new Promise<void>((resolve) => setTimeout(resolve, 250)), signal);
         }
         if (record.promise) await abortable(record.promise, signal);
       }
       const result = textResult(formatRecord(record, "fetched"), record.status === "error");
       if (
-        record.runRevision === revision
-        && record.settledRevision === revision
-        && record.status !== "running"
-        && record.status !== "queued"
+        record.runRevision === revision &&
+        record.settledRevision === revision &&
+        record.status !== "running" &&
+        record.status !== "queued"
       ) {
         record.resultConsumed = true;
       }

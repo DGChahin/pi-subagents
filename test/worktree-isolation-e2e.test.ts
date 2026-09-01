@@ -75,12 +75,9 @@ function subagentResultText(session: Context): string {
   return session.messages
     .filter(
       (message) =>
-        message.role === "toolResult" &&
-        (message as { toolName?: string }).toolName === "get_subagent_result",
+        message.role === "toolResult" && (message as { toolName?: string }).toolName === "get_subagent_result",
     )
-    .flatMap((message) =>
-      ((message.content ?? []) as Array<{ text?: string }>).map((block) => block.text ?? ""),
-    )
+    .flatMap((message) => ((message.content ?? []) as Array<{ text?: string }>).map((block) => block.text ?? ""))
     .join("\n");
 }
 
@@ -126,7 +123,11 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     // a later run without the key would otherwise inherit whatever this one set.
     setWorktreeIsolationEnabled(true);
     for (const dir of repos.splice(0)) {
-      try { git(dir, "worktree", "prune"); } catch { /* repo may be gone */ }
+      try {
+        git(dir, "worktree", "prune");
+      } catch {
+        /* repo may be gone */
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -94,7 +94,9 @@ describe("Agent startup failures fail the tool call (#179)", () => {
           isolation: "worktree",
           run_in_background: true,
         },
-        undefined, undefined, ctx(),
+        undefined,
+        undefined,
+        ctx(),
       ),
     ).rejects.toThrow('Cannot run with isolation: "worktree"');
   });
@@ -110,7 +112,9 @@ describe("Agent startup failures fail the tool call (#179)", () => {
         isolation: "worktree",
         run_in_background: false,
       },
-      undefined, undefined, ctx(),
+      undefined,
+      undefined,
+      ctx(),
     );
 
     expect(result.content[0].text).toContain("Foreground Agent execution is disabled");

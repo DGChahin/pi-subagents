@@ -35,7 +35,11 @@ describe("worktree", () => {
 
   afterEach(() => {
     // Clean up any lingering worktrees first, then remove repo
-    try { pruneWorktrees(repoDir); } catch { /* ignore */ }
+    try {
+      pruneWorktrees(repoDir);
+    } catch {
+      /* ignore */
+    }
     rmSync(repoDir, { recursive: true, force: true });
   });
 
@@ -45,15 +49,24 @@ describe("worktree", () => {
       expect(wt).toBeDefined();
       expect(existsSync(wt!.path)).toBe(true);
       expect(wt!.branch).toBe("pi-agent-test-id-1");
-      expect(wt!.baseSha).toBe(execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim());
+      expect(wt!.baseSha).toBe(
+        execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: repoDir,
+          stdio: "pipe",
+        })
+          .toString()
+          .trim(),
+      );
 
       // Verify it's a valid worktree with the repo's files
       expect(existsSync(join(wt!.path, "README.md"))).toBe(true);
 
       // Cleanup
-      try { execFileSync("git", ["worktree", "remove", "--force", wt!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", wt!.path], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("returns undefined for non-git directory", () => {
@@ -80,7 +93,11 @@ describe("worktree", () => {
     it("workPath equals path when created from the repo root", () => {
       const wt = createWorktree(repoDir, "root-wp")!;
       expect(wt.workPath).toBe(wt.path);
-      try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("workPath preserves subdirectory scoping (monorepo package cwd)", () => {
@@ -93,7 +110,11 @@ describe("worktree", () => {
       expect(wt).toBeDefined();
       expect(wt.workPath).toBe(join(wt.path, "packages", "api"));
       expect(existsSync(wt.workPath)).toBe(true);
-      try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("uses unique paths for multiple worktrees", () => {
@@ -104,8 +125,16 @@ describe("worktree", () => {
       expect(wt1!.path).not.toBe(wt2!.path);
 
       // Cleanup
-      try { execFileSync("git", ["worktree", "remove", "--force", wt1!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
-      try { execFileSync("git", ["worktree", "remove", "--force", wt2!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", wt1!.path], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
+      try {
+        execFileSync("git", ["worktree", "remove", "--force", wt2!.path], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
   });
 
@@ -115,20 +144,24 @@ describe("worktree", () => {
       writeFileSync(join(wt.path, "first.txt"), "first turn");
 
       const first = checkpointWorktree(wt, "first turn");
-      expect(first).toEqual(expect.objectContaining({
-        status: "checkpointed",
-        branch: "pi-agent-resumable-1",
-        path: wt.path,
-      }));
+      expect(first).toEqual(
+        expect.objectContaining({
+          status: "checkpointed",
+          branch: "pi-agent-resumable-1",
+          path: wt.path,
+        }),
+      );
       expect(existsSync(wt.path)).toBe(true);
 
       writeFileSync(join(wt.path, "second.txt"), "resumed turn");
       const second = checkpointWorktree(wt, "resumed turn");
-      expect(second).toEqual(expect.objectContaining({
-        status: "checkpointed",
-        branch: first.status === "checkpointed" ? first.branch : undefined,
-        path: wt.path,
-      }));
+      expect(second).toEqual(
+        expect.objectContaining({
+          status: "checkpointed",
+          branch: first.status === "checkpointed" ? first.branch : undefined,
+          path: wt.path,
+        }),
+      );
       expect(existsSync(wt.path)).toBe(true);
 
       const final = cleanupWorktree(repoDir, wt, "final cleanup");
@@ -175,18 +208,28 @@ describe("worktree", () => {
 
       // Verify the branch exists in the main repo
       const branches = execFileSync("git", ["branch", "--list", result.branch!], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim();
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
       expect(branches).toContain(result.branch!);
 
       // Verify the commit message
       const log = execFileSync("git", ["log", "--oneline", "-1", result.branch!], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim();
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
       expect(log).toContain("pi-agent: added new file");
 
       // Cleanup branch
-      try { execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("commits changes even when a pre-commit hook rejects (--no-verify)", () => {
@@ -204,7 +247,11 @@ describe("worktree", () => {
       expect(result.branch).toBe("pi-agent-hooked-1");
 
       // Cleanup branch
-      try { execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("creates branch when worktree is clean but HEAD moved", () => {
@@ -215,8 +262,11 @@ describe("worktree", () => {
       execFileSync("git", ["add", "committed-file.txt"], { cwd: wt.path, stdio: "pipe" });
       execFileSync("git", ["commit", "-m", "agent commit"], { cwd: wt.path, stdio: "pipe" });
       const agentCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: wt.path, stdio: "pipe",
-      }).toString().trim();
+        cwd: wt.path,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
 
       const result = cleanupWorktree(repoDir, wt, "already committed");
       expect(result.hasChanges).toBe(true);
@@ -224,13 +274,20 @@ describe("worktree", () => {
       expect(result.branch).toBe("pi-agent-committed-1");
 
       const branchCommit = execFileSync("git", ["rev-parse", result.branch!], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim();
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
       expect(branchCommit).toBe(agentCommit);
       expect(existsSync(wt.path)).toBe(false);
 
       // Cleanup branch
-      try { execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("does not force-overwrite existing branch", () => {
@@ -253,14 +310,25 @@ describe("worktree", () => {
 
       // Both branches should exist
       const branches = execFileSync("git", ["branch", "--list", "pi-agent-conflict-1*"], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim();
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
       expect(branches).toContain("pi-agent-conflict-1");
       expect(branches).toContain(result2.branch!);
 
       // Cleanup
-      try { execFileSync("git", ["branch", "-D", result1.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
-      try { execFileSync("git", ["branch", "-D", result2.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["branch", "-D", result1.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
+      try {
+        execFileSync("git", ["branch", "-D", result2.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
 
     it("retains recovery details when the final removal fails", () => {
@@ -290,13 +358,20 @@ describe("worktree", () => {
       expect(result.hasChanges).toBe(true);
 
       const log = execFileSync("git", ["log", "--oneline", "-1", result.branch!], {
-        cwd: repoDir, stdio: "pipe",
-      }).toString().trim();
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
       // "pi-agent: " prefix (10 chars) + 200 chars of x = 210 total max
       expect(log.length).toBeLessThanOrEqual(220); // some slack for hash prefix
 
       // Cleanup
-      try { execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        /* ignore */
+      }
     });
   });
 
@@ -322,9 +397,15 @@ describe("worktree", () => {
 describe("cleanupWorktree — failure path", () => {
   let repoDir: string;
 
-  beforeEach(() => { repoDir = initGitRepo(); });
+  beforeEach(() => {
+    repoDir = initGitRepo();
+  });
   afterEach(() => {
-    try { pruneWorktrees(repoDir); } catch { /* ignore */ }
+    try {
+      pruneWorktrees(repoDir);
+    } catch {
+      /* ignore */
+    }
     rmSync(repoDir, { recursive: true, force: true });
   });
 
@@ -374,13 +455,15 @@ describe("cleanupWorktree — failure path", () => {
     // The branch must exist in the MAIN repo after the worktree is gone —
     // that is what makes the agent's work recoverable.
     const branches = execFileSync("git", ["branch", "--list", result.branch!], {
-      cwd: repoDir, stdio: "pipe",
+      cwd: repoDir,
+      stdio: "pipe",
     }).toString();
     expect(branches).toContain(result.branch!);
     expect(existsSync(wt.path)).toBe(false);
     // And the commit is reachable from that branch.
     const files = execFileSync("git", ["ls-tree", "--name-only", result.branch!], {
-      cwd: repoDir, stdio: "pipe",
+      cwd: repoDir,
+      stdio: "pipe",
     }).toString();
     expect(files).toContain("work.txt");
   });

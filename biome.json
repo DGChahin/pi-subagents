@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
 	"linter": {
 		"enabled": true,
 		"rules": {
@@ -15,7 +15,9 @@
 		}
 	},
 	"formatter": {
-		"enabled": false
+		"enabled": true,
+		"indentStyle": "space",
+		"lineWidth": 120
 	},
 	"files": {
 		"includes": [

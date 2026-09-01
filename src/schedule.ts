@@ -335,7 +335,7 @@ export class SubagentScheduler {
     const cronCheck = SubagentScheduler.validateCronExpression(trimmed);
     if (cronCheck.valid) return { type: "cron", normalized: trimmed };
     throw new Error(
-      `Invalid schedule "${s}". Use 6-field cron (e.g. "0 0 9 * * 1" — 9am every Monday), interval ("5m"/"1h"), or one-shot ("+10m" / ISO).`
+      `Invalid schedule "${s}". Use 6-field cron (e.g. "0 0 9 * * 1" — 9am every Monday), interval ("5m"/"1h"), or one-shot ("+10m" / ISO).`,
     );
   }
 

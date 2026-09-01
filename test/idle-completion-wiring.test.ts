@@ -73,7 +73,7 @@ function makeCtx(sessionId: string, idle: () => boolean) {
 }
 
 function resultText(result: Record<string, unknown>): string {
-  return ((result.content as Array<{ text: string }>)[0]).text;
+  return (result.content as Array<{ text: string }>)[0].text;
 }
 
 function idFrom(result: Record<string, unknown>): string {
@@ -105,7 +105,7 @@ const microflush = async () => {
 
 const flush = async () => {
   await microflush();
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 };
 
 /** Retrieve only after the manager has marked this revision fully settled. */
@@ -123,9 +123,9 @@ async function retrieveSettled(
   if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
   await record.promise;
   expect(record.settledRevision).toBe(record.runRevision);
-  return tools.get("get_subagent_result")!.execute(
-    toolCallId, { agent_id: agentId, wait: true }, undefined, undefined, context,
-  );
+  return tools
+    .get("get_subagent_result")!
+    .execute(toolCallId, { agent_id: agentId, wait: true }, undefined, undefined, context);
 }
 
 describe("top-level background lifecycle and idle completion delivery", () => {
@@ -163,11 +163,14 @@ describe("top-level background lifecycle and idle completion delivery", () => {
   });
 
   function boot(settings: Record<string, unknown> = {}): Harness {
-    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({
-      schedulingEnabled: false,
-      outputTranscript: false,
-      ...settings,
-    }));
+    writeFileSync(
+      join(cwd, ".pi", "subagents.json"),
+      JSON.stringify({
+        schedulingEnabled: false,
+        outputTranscript: false,
+        ...settings,
+      }),
+    );
     const harness = makePi();
     subagentsExtension(harness.pi as never);
     return harness;
@@ -179,13 +182,15 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     context: ReturnType<typeof makeCtx>,
     extra: Record<string, unknown> = {},
   ) {
-    return tools.get("Agent")!.execute(
-      `call-${prompt}`,
-      { prompt, description: prompt, subagent_type: "general-purpose", ...extra },
-      undefined,
-      undefined,
-      context,
-    );
+    return tools
+      .get("Agent")!
+      .execute(
+        `call-${prompt}`,
+        { prompt, description: prompt, subagent_type: "general-purpose", ...extra },
+        undefined,
+        undefined,
+        context,
+      );
   }
 
   it("defaults top-level dispatch and resume to background and shares one concurrency queue", async () => {
@@ -196,16 +201,21 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     let finishBlocker: ((value: unknown) => void) | undefined;
     vi.mocked(runAgent)
       .mockResolvedValueOnce(agentResult("first result") as never)
-      .mockImplementationOnce(() => new Promise(resolve => { finishBlocker = resolve; }) as never);
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishBlocker = resolve;
+          }) as never,
+      );
     vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed result" });
 
     const first = await spawn(harness.tools, "first", context);
     const firstId = idFrom(first);
     expect(first.terminate).toBe(true);
     await flush();
-    const consumed = await harness.tools.get("get_subagent_result")!.execute(
-      "get-first", { agent_id: firstId, wait: true }, undefined, undefined, context,
-    );
+    const consumed = await harness.tools
+      .get("get_subagent_result")!
+      .execute("get-first", { agent_id: firstId, wait: true }, undefined, undefined, context);
     expect(resultText(consumed)).toContain("first result");
 
     const blocker = await spawn(harness.tools, "blocker", context);
@@ -240,7 +250,12 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     await harness.lifecycle.get("session_start")?.({}, oldContext);
 
     let finish: ((value: unknown) => void) | undefined;
-    vi.mocked(runAgent).mockImplementation(() => new Promise(resolve => { finish = resolve; }) as never);
+    vi.mocked(runAgent).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }) as never,
+    );
     const dispatched = await spawn(harness.tools, "old work", oldContext);
     const id = idFrom(dispatched);
 
@@ -267,8 +282,8 @@ describe("top-level background lifecycle and idle completion delivery", () => {
     await harness.lifecycle.get("session_start")?.({}, context);
 
     const resolvers = new Map<string, (value: unknown) => void>();
-    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt) =>
-      new Promise(resolve => resolvers.set(prompt, resolve)) as never,
+    vi.mocked(runAgent).mockImplementation(
+      (_ctx, _type, prompt) => new Promise((resolve) => resolvers.set(prompt, resolve)) as never,
     );
 
     const batchA = idFrom(await spawn(harness.tools, "batch-a", context));

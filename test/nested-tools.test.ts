@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
-import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
+import {
+  createNestedSubagentTools,
+  getMaxSubagentDepth,
+  type NestedAgentManager,
+  setMaxSubagentDepth,
+} from "../src/nested-tools.js";
 import { encodeCwd } from "../src/output-file.js";
 
 let cwd: string;
@@ -117,7 +122,10 @@ describe("child-safe nested Agent tools", () => {
 
     expect(result.isError).toBe(false);
     expect(spawnAndWait).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), "reviewer", "Review it",
+      expect.anything(),
+      expect.anything(),
+      "reviewer",
+      "Review it",
       expect.objectContaining({
         depth: 2,
         parentAgentId: "parent-1",
@@ -136,11 +144,15 @@ describe("child-safe nested Agent tools", () => {
 
     try {
       const [agent] = tools();
-      const result = await execute(agent, {
-        subagent_type: "intruder",
-        description: "untrusted agent",
-        prompt: "Do work",
-      }, workCwd);
+      const result = await execute(
+        agent,
+        {
+          subagent_type: "intruder",
+          description: "untrusted agent",
+          prompt: "Do work",
+        },
+        workCwd,
+      );
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Unknown or disabled");
@@ -198,10 +210,7 @@ describe("child-safe nested Agent tools", () => {
   });
 
   it("applies the scopeModels allowlist to a caller-supplied model", async () => {
-    writeFileSync(
-      join(cwd, ".pi", "settings.json"),
-      JSON.stringify({ enabledModels: ["anthropic/allowed"] }),
-    );
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["anthropic/allowed"] }));
     setScopeModelsEnabled(true);
     const [agent] = tools();
 
@@ -278,7 +287,10 @@ describe("child-safe nested Agent tools", () => {
     });
     expect(launched.content[0].text).toContain("child-1");
     expect(spawn).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), "scout", "Find them",
+      expect.anything(),
+      expect.anything(),
+      "scout",
+      "Find them",
       expect.objectContaining({ isBackground: true, depth: 2, parentAgentId: "parent-1" }),
     );
 
@@ -294,12 +306,16 @@ describe("child-safe nested Agent tools", () => {
     });
     expect((await execute(getResult, { agent_id: "foreign" })).isError).toBe(true);
     expect((await execute(steer, { agent_id: "foreign", message: "stop" })).isError).toBe(true);
-    expect((await execute(agent, {
-      resume: "foreign",
-      subagent_type: "scout",
-      description: "resume foreign",
-      prompt: "Continue",
-    })).isError).toBe(true);
+    expect(
+      (
+        await execute(agent, {
+          resume: "foreign",
+          subagent_type: "scout",
+          description: "resume foreign",
+          prompt: "Continue",
+        })
+      ).isError,
+    ).toBe(true);
     expect(manager.resume).not.toHaveBeenCalled();
   });
 
@@ -311,12 +327,7 @@ describe("child-safe nested Agent tools", () => {
     await execute(agent, { resume: record.id, prompt: "Continue", max_turns: 5 });
 
     expect(manager.resume).toHaveBeenCalledOnce();
-    expect(manager.resume).toHaveBeenCalledWith(
-      record.id,
-      "Continue",
-      undefined,
-      { maxTurns: 5 },
-    );
+    expect(manager.resume).toHaveBeenCalledWith(record.id, "Continue", undefined, { maxTurns: 5 });
   });
 
   it("uses the current agent frontmatter when nested resume omits max_turns", async () => {
@@ -326,12 +337,7 @@ describe("child-safe nested Agent tools", () => {
 
     await execute(agent, { resume: record.id, prompt: "Continue" });
 
-    expect(manager.resume).toHaveBeenCalledWith(
-      record.id,
-      "Continue",
-      undefined,
-      { maxTurns: 20 },
-    );
+    expect(manager.resume).toHaveBeenCalledWith(record.id, "Continue", undefined, { maxTurns: 20 });
   });
 
   it("uses the project default when nested resume has no frontmatter max_turns", async () => {
@@ -340,12 +346,7 @@ describe("child-safe nested Agent tools", () => {
 
     await execute(agent, { resume: record.id, prompt: "Continue" });
 
-    expect(manager.resume).toHaveBeenCalledWith(
-      record.id,
-      "Continue",
-      undefined,
-      { maxTurns: 30 },
-    );
+    expect(manager.resume).toHaveBeenCalledWith(record.id, "Continue", undefined, { maxTurns: 30 });
   });
 
   it("waits for a queued owned child to start and settle", async () => {
@@ -378,20 +379,22 @@ describe("child-safe nested Agent tools", () => {
       id: "running-child",
       status: "running",
       parentAgentId: "parent-1",
-      promise: new Promise<void>(resolve => { settleChild = resolve; }),
+      promise: new Promise<void>((resolve) => {
+        settleChild = resolve;
+      }),
     };
     records.set(record.id, record);
 
     const controller = new AbortController();
     const outcome = getResult
       .execute("call-abort", { agent_id: record.id, wait: true }, controller.signal, undefined, ctx())
-      .then(() => "resolved", (e: unknown) => (e instanceof Error ? e.name : String(e)));
+      .then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.name : String(e)),
+      );
 
     controller.abort();
-    const settled = await Promise.race([
-      outcome,
-      new Promise(r => setTimeout(() => r("timed-out"), 100)),
-    ]);
+    const settled = await Promise.race([outcome, new Promise((r) => setTimeout(() => r("timed-out"), 100))]);
 
     expect(settled).toBe("AbortError");
     // The wait was cancelled but the child was never aborted or consumed.
@@ -430,7 +433,10 @@ describe("child-safe nested Agent tools", () => {
 
     expect(result.isError).toBe(false);
     expect(spawnAndWait).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), "scout", "Do work",
+      expect.anything(),
+      expect.anything(),
+      "scout",
+      "Do work",
       expect.objectContaining({ depth: 2, maxSubagentDepth: 3 }),
       expect.any(Function),
     );
@@ -459,7 +465,10 @@ describe("child-safe nested Agent tools", () => {
 
   it("uses the fetchable wording when the parent polls a background child by id", async () => {
     records.set("child-1", {
-      id: "child-1", status: "aborted", result: "partial work", parentAgentId: "parent-1",
+      id: "child-1",
+      status: "aborted",
+      result: "partial work",
+      parentAgentId: "parent-1",
     });
     const [, getResult] = tools();
     const result = await execute(getResult, { agent_id: "child-1" });
@@ -473,8 +482,11 @@ describe("child-safe nested Agent tools", () => {
     spawnAndWait.mockImplementation(async () => ({
       id: "child-1",
       record: {
-        id: "child-1", status: "error", error: "provider exploded",
-        result: "got this far", parentAgentId: "parent-1",
+        id: "child-1",
+        status: "error",
+        error: "provider exploded",
+        result: "got this far",
+        parentAgentId: "parent-1",
       },
     }));
     const [agent] = tools();
@@ -513,7 +525,9 @@ describe("child-safe nested Agent tools", () => {
     // descendant would otherwise never reach the one record anyone can see.
     const top = { id: "top", status: "running", lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 } };
     const middle = {
-      id: "parent-1", status: "running", parentAgentId: "top",
+      id: "parent-1",
+      status: "running",
+      parentAgentId: "top",
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
     };
     records.set("top", top);
@@ -568,11 +582,17 @@ describe("child-safe nested Agent tools", () => {
     // silently misroute the grandchild's cwd, conversation, and model.
     const [agent] = tools();
     const executionCtx = ctx();
-    await agent.execute("call-1", {
-      subagent_type: "scout",
-      description: "ctx check",
-      prompt: "Do work",
-    } as any, undefined, undefined, executionCtx);
+    await agent.execute(
+      "call-1",
+      {
+        subagent_type: "scout",
+        description: "ctx check",
+        prompt: "Do work",
+      } as any,
+      undefined,
+      undefined,
+      executionCtx,
+    );
 
     expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
   });
@@ -586,8 +606,12 @@ describe("child-safe nested Agent tools", () => {
 // delegation project-wide with no error.
 describe("setMaxSubagentDepth clamping", () => {
   let previous: number;
-  beforeEach(() => { previous = getMaxSubagentDepth(); });
-  afterEach(() => { setMaxSubagentDepth(previous); });
+  beforeEach(() => {
+    previous = getMaxSubagentDepth();
+  });
+  afterEach(() => {
+    setMaxSubagentDepth(previous);
+  });
 
   it("floors a negative depth at 0 rather than storing it", () => {
     setMaxSubagentDepth(-1);

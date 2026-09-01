@@ -116,7 +116,11 @@ describe("status note reaches the parent through the real handlers", () => {
 
   it("nested foreground user-stop says not to treat partial output as complete", async () => {
     let finish: (value: any) => void = () => {};
-    vi.mocked(runAgent).mockReturnValue(new Promise((resolve) => { finish = resolve; }) as any);
+    vi.mocked(runAgent).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }) as any,
+    );
     const { pi } = makePi();
     const manager = new AgentManager();
     const [agent] = createNestedSubagentTools({
@@ -179,11 +183,13 @@ describe("status note reaches the parent through the real handlers", () => {
       maxSubagentDepth: 99,
       configCwd: "/untrusted/config",
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(registry.getRecord(topId)).toEqual(expect.objectContaining({
-      parentAgentId: undefined,
-      depth: 1,
-    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(registry.getRecord(topId)).toEqual(
+      expect.objectContaining({
+        parentAgentId: undefined,
+        depth: 1,
+      }),
+    );
 
     // Internal scoped tools receive the raw owning manager through nestedRuntime.
     const rawManager = vi.mocked(runAgent).mock.calls[0][3].nestedRuntime.manager;
@@ -197,7 +203,7 @@ describe("status note reaches the parent through the real handlers", () => {
       depth: 2,
       maxSubagentDepth: 2,
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(registry.getRecord(id)).toBeUndefined();
     for (const [name, params] of [
@@ -222,20 +228,22 @@ describe("status note reaches the parent through the real handlers", () => {
     subagentsExtension(pi);
     await bind(lifecycle); // register RPC channels via session_start (#142)
 
-    const spawn = await tools.get("Agent").execute(
-      "tc2",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: true },
-      undefined, undefined, ctx(),
-    );
+    const spawn = await tools
+      .get("Agent")
+      .execute(
+        "tc2",
+        { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: true },
+        undefined,
+        undefined,
+        ctx(),
+      );
     const id = textOf(spawn).match(/Agent ID: (\S+)/)?.[1];
     expect(id, "background spawn should surface an agent id").toBeTruthy();
 
     // The user stops it — same path the viewer's stop key uses (manager.abort).
     eventHandlers.get("subagents:rpc:stop")?.({ requestId: "r1", agentId: id });
 
-    const res = await tools.get("get_subagent_result").execute(
-      "tc3", { agent_id: id }, undefined, undefined, ctx(),
-    );
+    const res = await tools.get("get_subagent_result").execute("tc3", { agent_id: id }, undefined, undefined, ctx());
 
     const out = textOf(res);
     expect(out).toContain("STOPPED BY THE USER");
@@ -269,20 +277,27 @@ describe("subagents:compacted", () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tc-compact",
-      { prompt: "go", description: "compacting agent", subagent_type: "general-purpose" },
-      undefined, undefined, ctx(),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-compact",
+        { prompt: "go", description: "compacting agent", subagent_type: "general-purpose" },
+        undefined,
+        undefined,
+        ctx(),
+      );
 
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:compacted", expect.objectContaining({
-      id: expect.any(String),
-      type: "general-purpose",
-      description: "compacting agent",
-      reason: "threshold",
-      tokensBefore: 12345,
-      compactionCount: 1,
-    }));
+    expect(pi.events.emit).toHaveBeenCalledWith(
+      "subagents:compacted",
+      expect.objectContaining({
+        id: expect.any(String),
+        type: "general-purpose",
+        description: "compacting agent",
+        reason: "threshold",
+        tokensBefore: 12345,
+        compactionCount: 1,
+      }),
+    );
   });
 
   it("counts repeated compactions on the same agent", async () => {
@@ -294,11 +309,15 @@ describe("subagents:compacted", () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tc-compact2",
-      { prompt: "go", description: "twice", subagent_type: "general-purpose" },
-      undefined, undefined, ctx(),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-compact2",
+        { prompt: "go", description: "twice", subagent_type: "general-purpose" },
+        undefined,
+        undefined,
+        ctx(),
+      );
 
     const counts = pi.events.emit.mock.calls
       .filter((c: any[]) => c[0] === "subagents:compacted")
@@ -313,11 +332,15 @@ describe("subagents:compacted", () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tc-parent",
-      { prompt: "go", description: "parent", subagent_type: "general-purpose" },
-      undefined, undefined, ctx(),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-parent",
+        { prompt: "go", description: "parent", subagent_type: "general-purpose" },
+        undefined,
+        undefined,
+        ctx(),
+      );
     const rawManager = vi.mocked(runAgent).mock.calls[0][3].nestedRuntime.manager;
     const parentId = vi.mocked(runAgent).mock.calls[0][3].nestedRuntime.parentAgentId;
     pi.events.emit.mockClear();
@@ -329,7 +352,7 @@ describe("subagents:compacted", () => {
       depth: 2,
       maxSubagentDepth: 2,
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(pi.events.emit).not.toHaveBeenCalledWith("subagents:compacted", expect.anything());
   });

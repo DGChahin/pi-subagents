@@ -48,11 +48,14 @@ describe("loadCustomAgents", () => {
   });
 
   it("loads a workspace project agent from .agents/agents", () => {
-    writeWorkspaceAgent("reviewer", `---
+    writeWorkspaceAgent(
+      "reviewer",
+      `---
 description: Workspace Reviewer
 ---
 
-Workspace prompt.`);
+Workspace prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(1);
@@ -62,16 +65,22 @@ Workspace prompt.`);
   });
 
   it(".pi/agents overrides .agents/agents on a name clash", () => {
-    writeWorkspaceAgent("dupe", `---
+    writeWorkspaceAgent(
+      "dupe",
+      `---
 description: Workspace Project
 ---
 
-Workspace prompt.`);
-    writeAgent("dupe", `---
+Workspace prompt.`,
+    );
+    writeAgent(
+      "dupe",
+      `---
 description: Pi Project
 ---
 
-Pi prompt.`);
+Pi prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(1);
@@ -84,16 +93,22 @@ Pi prompt.`);
     process.env.PI_CODING_AGENT_DIR = globalAgentDir;
     const globalAgents = join(globalAgentDir, "agents");
     mkdirSync(globalAgents, { recursive: true });
-    writeFileSync(join(globalAgents, "dupe.md"), `---
+    writeFileSync(
+      join(globalAgents, "dupe.md"),
+      `---
 description: Global
 ---
 
-Global prompt.`);
-    writeWorkspaceAgent("dupe", `---
+Global prompt.`,
+    );
+    writeWorkspaceAgent(
+      "dupe",
+      `---
 description: Workspace Project
 ---
 
-Workspace prompt.`);
+Workspace prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(1);
@@ -102,7 +117,9 @@ Workspace prompt.`);
   });
 
   it("loads a basic agent with all frontmatter fields", () => {
-    writeAgent("auditor", `---
+    writeAgent(
+      "auditor",
+      `---
 description: Security Auditor
 tools: read, grep, find
 model: anthropic/claude-opus-4-6
@@ -118,7 +135,8 @@ run_in_background: true
 isolated: true
 ---
 
-You are a security auditor.`);
+You are a security auditor.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(1);
@@ -142,10 +160,13 @@ You are a security auditor.`);
   });
 
   it("uses sensible defaults when frontmatter is empty", () => {
-    writeAgent("minimal", `---
+    writeAgent(
+      "minimal",
+      `---
 ---
 
-Just a prompt.`);
+Just a prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("minimal")!;
@@ -184,33 +205,54 @@ Just a prompt.`);
   });
 
   it("parses allowed_subagents: off by default, `all` wildcard, csv restriction", () => {
-    writeAgent("omitted", `---
+    writeAgent(
+      "omitted",
+      `---
 ---
-Off.`);
-    writeAgent("unrestricted", `---
+Off.`,
+    );
+    writeAgent(
+      "unrestricted",
+      `---
 allowed_subagents: all
 ---
-Unrestricted.`);
-    writeAgent("wildcard", `---
+Unrestricted.`,
+    );
+    writeAgent(
+      "wildcard",
+      `---
 allowed_subagents: "*"
 ---
-Unrestricted.`);
-    writeAgent("mixed-case", `---
+Unrestricted.`,
+    );
+    writeAgent(
+      "mixed-case",
+      `---
 allowed_subagents: scout, ALL
 ---
-Unrestricted.`);
-    writeAgent("none", `---
+Unrestricted.`,
+    );
+    writeAgent(
+      "none",
+      `---
 allowed_subagents: none
 ---
-Off.`);
-    writeAgent("blank", `---
+Off.`,
+    );
+    writeAgent(
+      "blank",
+      `---
 allowed_subagents:
 ---
-Off.`);
-    writeAgent("restricted", `---
+Off.`,
+    );
+    writeAgent(
+      "restricted",
+      `---
 allowed_subagents: scout, reviewer
 ---
-Restricted.`);
+Restricted.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("omitted")!.allowedSubagents).toBeUndefined();
@@ -222,15 +264,21 @@ Restricted.`);
     expect(result.get("restricted")!.allowedSubagents).toEqual(["scout", "reviewer"]);
   });
 
-  it("accepts booleans like extensions:/skills: do, instead of a type named \"true\"", () => {
-    writeAgent("bool-on", `---
+  it('accepts booleans like extensions:/skills: do, instead of a type named "true"', () => {
+    writeAgent(
+      "bool-on",
+      `---
 allowed_subagents: true
 ---
-On.`);
-    writeAgent("bool-off", `---
+On.`,
+    );
+    writeAgent(
+      "bool-off",
+      `---
 allowed_subagents: false
 ---
-Off.`);
+Off.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("bool-on")!.allowedSubagents).toBe("all");
@@ -238,23 +286,29 @@ Off.`);
   });
 
   it("handles tools: none → empty array", () => {
-    writeAgent("notool", `---
+    writeAgent(
+      "notool",
+      `---
 tools: none
 ---
 
-No tools.`);
+No tools.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("notool")!.builtinToolNames).toEqual([]);
   });
 
   it("handles extensions: false → no extensions", () => {
-    writeAgent("noext", `---
+    writeAgent(
+      "noext",
+      `---
 extensions: false
 skills: false
 ---
 
-No extensions.`);
+No extensions.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("noext")!;
@@ -263,12 +317,15 @@ No extensions.`);
   });
 
   it("handles extension allowlist", () => {
-    writeAgent("partial", `---
+    writeAgent(
+      "partial",
+      `---
 extensions: web-search, mcp-server
 skills: planning, review
 ---
 
-Partial access.`);
+Partial access.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("partial")!;
@@ -277,12 +334,15 @@ Partial access.`);
   });
 
   it("parses exclude_extensions CSV", () => {
-    writeAgent("no-notify", `---
+    writeAgent(
+      "no-notify",
+      `---
 extensions: true
 exclude_extensions: pi-notify, telemetry
 ---
 
-No notifications.`);
+No notifications.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("no-notify")!;
@@ -291,28 +351,37 @@ No notifications.`);
   });
 
   it("parses exclude_extensions YAML list", () => {
-    writeAgent("no-notify-yaml", `---
+    writeAgent(
+      "no-notify-yaml",
+      `---
 exclude_extensions:
   - pi-notify
 ---
 
-No notifications.`);
+No notifications.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("no-notify-yaml")!.excludeExtensions).toEqual(["pi-notify"]);
   });
 
   it("exclude_extensions omitted or none → undefined", () => {
-    writeAgent("plain", `---
+    writeAgent(
+      "plain",
+      `---
 description: plain
 ---
 
-Plain.`);
-    writeAgent("explicit-none", `---
+Plain.`,
+    );
+    writeAgent(
+      "explicit-none",
+      `---
 exclude_extensions: none
 ---
 
-None.`);
+None.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("plain")!.excludeExtensions).toBeUndefined();
@@ -320,11 +389,14 @@ None.`);
   });
 
   it("passes through unknown tool names (not filtered)", () => {
-    writeAgent("custom-tools", `---
+    writeAgent(
+      "custom-tools",
+      `---
 tools: read, my_custom_tool, grep
 ---
 
-Custom tools.`);
+Custom tools.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     // Unknown tool names are passed through — filtering happens at tool creation time
@@ -332,11 +404,14 @@ Custom tools.`);
   });
 
   it("partitions tools: ext: entries out of builtinToolNames into extSelectors", () => {
-    writeAgent("ext-agent", `---
+    writeAgent(
+      "ext-agent",
+      `---
 tools: read, ext:foo, ext:bar/x
 ---
 
-Extension selectors.`);
+Extension selectors.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("ext-agent")!;
     expect(agent.builtinToolNames).toEqual(["read"]);
@@ -344,11 +419,14 @@ Extension selectors.`);
   });
 
   it("tools: with only ext: entries yields zero built-ins", () => {
-    writeAgent("ext-only", `---
+    writeAgent(
+      "ext-only",
+      `---
 tools: ext:foo/bar
 ---
 
-Ext only.`);
+Ext only.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("ext-only")!;
     expect(agent.builtinToolNames).toEqual([]);
@@ -356,11 +434,14 @@ Ext only.`);
   });
 
   it("tools: '*' expands to all built-ins and composes with ext: selectors", () => {
-    writeAgent("wild", `---
+    writeAgent(
+      "wild",
+      `---
 tools: "*, ext:foo"
 ---
 
-Wildcard plus ext.`);
+Wildcard plus ext.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("wild")!;
     expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
@@ -370,7 +451,11 @@ Wildcard plus ext.`);
   it("tools: 'all' is a case-insensitive alias for '*' (closes #75)", () => {
     // `tools: all` previously parsed "all" as a single tool name → allowlist
     // containing the non-existent tool "all" → silent zero-tool agent.
-    for (const [name, value] of [["all-lower", "all"], ["all-upper", "ALL"], ["all-mixed", "All"]]) {
+    for (const [name, value] of [
+      ["all-lower", "all"],
+      ["all-upper", "ALL"],
+      ["all-mixed", "All"],
+    ]) {
       writeAgent(name, `---\ntools: ${value}\n---\n\nAlias.`);
       const agent = loadCustomAgents(tmpDir).get(name)!;
       expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
@@ -379,11 +464,14 @@ Wildcard plus ext.`);
   });
 
   it("tools: 'all' composes with ext: selectors like '*'", () => {
-    writeAgent("all-plus-ext", `---
+    writeAgent(
+      "all-plus-ext",
+      `---
 tools: "all, ext:foo"
 ---
 
-All plus ext.`);
+All plus ext.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("all-plus-ext")!;
     expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
@@ -391,11 +479,14 @@ All plus ext.`);
   });
 
   it("leaves extSelectors undefined when tools: has no ext: entries", () => {
-    writeAgent("plain", `---
+    writeAgent(
+      "plain",
+      `---
 tools: read, bash
 ---
 
-Plain tools.`);
+Plain tools.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("plain")!;
     expect(agent.builtinToolNames).toEqual(["read", "bash"]);
@@ -403,11 +494,14 @@ Plain tools.`);
   });
 
   it("passes through thinking level as-is (no validation)", () => {
-    writeAgent("anythink", `---
+    writeAgent(
+      "anythink",
+      `---
 thinking: turbo
 ---
 
-Any thinking.`);
+Any thinking.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     // Pi validates at session creation — we just pass through
@@ -415,71 +509,92 @@ Any thinking.`);
   });
 
   it("loads thinking: max (pi 0.80's top level) unchanged (#147)", () => {
-    writeAgent("deepthink", `---
+    writeAgent(
+      "deepthink",
+      `---
 thinking: max
 ---
 
-Think hard.`);
+Think hard.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("deepthink")!.thinking).toBe("max");
   });
 
   it("accepts max_turns: 0 as unlimited", () => {
-    writeAgent("unlimited", `---
+    writeAgent(
+      "unlimited",
+      `---
 max_turns: 0
 ---
 
-Unlimited turns.`);
+Unlimited turns.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("unlimited")!.maxTurns).toBe(0);
   });
 
   it("rejects negative max_turns", () => {
-    writeAgent("negturns", `---
+    writeAgent(
+      "negturns",
+      `---
 max_turns: -5
 ---
 
-Negative turns.`);
+Negative turns.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("negturns")!.maxTurns).toBeUndefined();
   });
 
   it("handles prompt_mode: append", () => {
-    writeAgent("appender", `---
+    writeAgent(
+      "appender",
+      `---
 prompt_mode: append
 ---
 
-Extra instructions.`);
+Extra instructions.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("appender")!.promptMode).toBe("append");
   });
 
   it("defaults unknown prompt_mode to replace", () => {
-    writeAgent("badmode", `---
+    writeAgent(
+      "badmode",
+      `---
 prompt_mode: merge
 ---
 
-Unknown mode.`);
+Unknown mode.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("badmode")!.promptMode).toBe("replace");
   });
 
   it("loads multiple agents", () => {
-    writeAgent("agent1", `---
+    writeAgent(
+      "agent1",
+      `---
 description: First
 ---
 
-First agent.`);
-    writeAgent("agent2", `---
+First agent.`,
+    );
+    writeAgent(
+      "agent2",
+      `---
 description: Second
 ---
 
-Second agent.`);
+Second agent.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(2);
@@ -491,11 +606,14 @@ Second agent.`);
     const dir = join(tmpDir, ".pi", "agents");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "notes.txt"), "not an agent");
-    writeFileSync(join(dir, "real.md"), `---
+    writeFileSync(
+      join(dir, "real.md"),
+      `---
 description: Real Agent
 ---
 
-Real.`);
+Real.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(1);
@@ -503,16 +621,22 @@ Real.`);
   });
 
   it("allows agents with names matching defaults (overrides them)", () => {
-    writeAgent("Explore", `---
+    writeAgent(
+      "Explore",
+      `---
 description: Custom Explore
 ---
 
-Custom explore agent.`);
-    writeAgent("custom", `---
+Custom explore agent.`,
+    );
+    writeAgent(
+      "custom",
+      `---
 description: Custom Agent
 ---
 
-Should be loaded.`);
+Should be loaded.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.has("Explore")).toBe(true);
@@ -521,23 +645,29 @@ Should be loaded.`);
   });
 
   it("handles empty body with frontmatter", () => {
-    writeAgent("nobody", `---
+    writeAgent(
+      "nobody",
+      `---
 description: No body
 tools: read
 ---
-`);
+`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("nobody")!.systemPrompt).toBe("");
   });
 
   it("supports inherit_extensions as alternative to extensions", () => {
-    writeAgent("altkey", `---
+    writeAgent(
+      "altkey",
+      `---
 inherit_extensions: false
 inherit_skills: false
 ---
 
-Alt keys.`);
+Alt keys.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("altkey")!;
@@ -546,12 +676,15 @@ Alt keys.`);
   });
 
   it("extensions: none → false", () => {
-    writeAgent("extnone", `---
+    writeAgent(
+      "extnone",
+      `---
 extensions: none
 skills: none
 ---
 
-None.`);
+None.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("extnone")!;
@@ -560,12 +693,15 @@ None.`);
   });
 
   it("extensions: true → true (inherit all)", () => {
-    writeAgent("exttrue", `---
+    writeAgent(
+      "exttrue",
+      `---
 extensions: true
 skills: true
 ---
 
-All.`);
+All.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("exttrue")!;
@@ -574,10 +710,13 @@ All.`);
   });
 
   it("handles enabled: false frontmatter", () => {
-    writeAgent("disabled", `---
+    writeAgent(
+      "disabled",
+      `---
 enabled: false
 ---
-`);
+`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("disabled")!;
@@ -587,12 +726,15 @@ enabled: false
   it("takes the agent type from frontmatter name, not the filename", () => {
     // Claude Code's rule: "the filename doesn't have to match". The same file
     // dropped into either tool must dispatch under the same type.
-    writeAgent("blubb", `---
+    writeAgent(
+      "blubb",
+      `---
 name: code-review
 description: Reviews code
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("code-review")!.name).toBe("code-review");
@@ -602,22 +744,24 @@ Agent prompt.`);
   it("records the file it was read from, not the one its type would name", () => {
     // `/agents` edits `sourcePath`: probing for `<type>.md` finds nothing here,
     // and its no-file branch writes a stub that loses to this file on load.
-    writeAgent("blubb", `---
+    writeAgent(
+      "blubb",
+      `---
 name: code-review
 description: Reviews code
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
-    expect(loadCustomAgents(tmpDir).get("code-review")!.sourcePath)
-      .toBe(join(tmpDir, ".pi", "agents", "blubb.md"));
+    expect(loadCustomAgents(tmpDir).get("code-review")!.sourcePath).toBe(join(tmpDir, ".pi", "agents", "blubb.md"));
   });
 
   it("falls back to the filename for an empty or blank declared name", () => {
     // A quoted empty `name:` would otherwise register the agent under the empty
     // type — unspawnable, and it takes the filename-derived one down with it.
-    writeAgent("myagent", "---\nname: \"\"\ndescription: My Agent\n---\n\nPrompt.");
-    writeAgent("other", "---\nname: \"   \"\ndescription: Other\n---\n\nPrompt.");
+    writeAgent("myagent", '---\nname: ""\ndescription: My Agent\n---\n\nPrompt.');
+    writeAgent("other", '---\nname: "   "\ndescription: Other\n---\n\nPrompt.');
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("myagent")!.name).toBe("myagent");
@@ -626,7 +770,7 @@ Agent prompt.`);
   });
 
   it("trims a declared name so it matches what the user meant to type", () => {
-    writeAgent("blubb", "---\nname: \" code-review \"\ndescription: Reviews code\n---\n\nPrompt.");
+    writeAgent("blubb", '---\nname: " code-review "\ndescription: Reviews code\n---\n\nPrompt.');
 
     expect(loadCustomAgents(tmpDir).get("code-review")!.name).toBe("code-review");
   });
@@ -634,23 +778,29 @@ Agent prompt.`);
   it("falls back to the filename when no name is declared", () => {
     // Claude Code requires `name`; most existing files here predate it and
     // must keep loading under the identity they already dispatch by.
-    writeAgent("myagent", `---
+    writeAgent(
+      "myagent",
+      `---
 description: My Agent
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     expect(loadCustomAgents(tmpDir).get("myagent")!.name).toBe("myagent");
   });
 
   it("keeps display_name as a label only, independent of the type", () => {
-    writeAgent("blubb", `---
+    writeAgent(
+      "blubb",
+      `---
 name: code-review
 description: My Agent
 display_name: MyAgent
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("code-review")!;
     expect(agent.name).toBe("code-review");
@@ -660,13 +810,16 @@ Agent prompt.`);
   it("leaves displayName unset so the badge falls back to the type", () => {
     // A Claude Code file has no display_name; `getConfig` resolves the label
     // to the type, so it still badges as "code-reviewer" as it did before.
-    writeAgent("whatever", `---
+    writeAgent(
+      "whatever",
+      `---
 name: code-reviewer
 description: Reviews code
 color: "#8B5CF6"
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     const agent = loadCustomAgents(tmpDir).get("code-reviewer")!;
     expect(agent.name).toBe("code-reviewer");
@@ -677,12 +830,15 @@ Agent prompt.`);
   it("accepts a name Claude Code accepts, however unlike a type it looks", () => {
     // Its docs describe names as "lowercase letters and hyphens", but the only
     // load failure they state is the colon — so this must still load.
-    writeAgent("reviewer", `---
+    writeAgent(
+      "reviewer",
+      `---
 name: Code Reviewer
 description: Reviews code
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     expect(loadCustomAgents(tmpDir).get("Code Reviewer")!.name).toBe("Code Reviewer");
   });
@@ -691,12 +847,15 @@ Agent prompt.`);
     // Claude Code doesn't load these. Skipping beats loading it under the
     // filename, which would dispatch an agent whose declared identity nothing
     // honoured.
-    writeAgent("scoped", `---
+    writeAgent(
+      "scoped",
+      `---
 name: my-plugin:reviewer
 description: Reviews code
 ---
 
-Agent prompt.`);
+Agent prompt.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("my-plugin:reviewer")).toBeUndefined();
@@ -716,7 +875,7 @@ Agent prompt.`);
       const result = loadCustomAgents(tmpDir);
 
       expect(result.get("scoped")?.description).toBe("An unrelated agent");
-      const message = warn.mock.calls.map(args => String(args[0])).join("\n");
+      const message = warn.mock.calls.map((args) => String(args[0])).join("\n");
       expect(message).toContain("reserved for plugin-scoped identifiers");
       expect(message).not.toContain("now loads from");
     } finally {
@@ -727,31 +886,40 @@ Agent prompt.`);
   it("lets a later file win a declared-name clash, as a filename clash always did", () => {
     // Filenames were unique per directory by construction; declared names are
     // not, so two files in one directory can now claim the same type.
-    writeAgent("a-first", `---
+    writeAgent(
+      "a-first",
+      `---
 name: shared
 description: first
 ---
 
-First.`);
-    writeAgent("b-second", `---
+First.`,
+    );
+    writeAgent(
+      "b-second",
+      `---
 name: shared
 description: second
 ---
 
-Second.`);
+Second.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("shared")!.description).toBe("second");
-    expect([...result.keys()].filter(k => k === "shared")).toHaveLength(1);
+    expect([...result.keys()].filter((k) => k === "shared")).toHaveLength(1);
   });
 
   it("parses disallowed_tools as csv list", () => {
-    writeAgent("restricted", `---
+    writeAgent(
+      "restricted",
+      `---
 description: Restricted Agent
 disallowed_tools: bash, write
 ---
 
-No bash or write.`);
+No bash or write.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("restricted")!;
@@ -759,90 +927,114 @@ No bash or write.`);
   });
 
   it("disallowed_tools defaults to undefined when omitted", () => {
-    writeAgent("unrestricted", `---
+    writeAgent(
+      "unrestricted",
+      `---
 description: Unrestricted
 ---
 
-All tools.`);
+All tools.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("unrestricted")!.disallowedTools).toBeUndefined();
   });
 
   it("parses memory scope", () => {
-    writeAgent("rememberer", `---
+    writeAgent(
+      "rememberer",
+      `---
 description: Agent with memory
 memory: project
 ---
 
-Remember things.`);
+Remember things.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("rememberer")!.memory).toBe("project");
   });
 
   it("parses memory: user scope", () => {
-    writeAgent("global-mem", `---
+    writeAgent(
+      "global-mem",
+      `---
 memory: user
 ---
 
-User memory.`);
+User memory.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("global-mem")!.memory).toBe("user");
   });
 
   it("memory defaults to undefined when omitted", () => {
-    writeAgent("no-mem", `---
+    writeAgent(
+      "no-mem",
+      `---
 description: No memory
 ---
 
-Stateless.`);
+Stateless.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("no-mem")!.memory).toBeUndefined();
   });
 
   it("rejects invalid memory scope", () => {
-    writeAgent("bad-mem", `---
+    writeAgent(
+      "bad-mem",
+      `---
 memory: invalid
 ---
 
-Bad memory.`);
+Bad memory.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("bad-mem")!.memory).toBeUndefined();
   });
 
   it("parses isolation: worktree", () => {
-    writeAgent("isolated-wt", `---
+    writeAgent(
+      "isolated-wt",
+      `---
 description: Worktree agent
 isolation: worktree
 ---
 
-Isolated.`);
+Isolated.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("isolated-wt")!.isolation).toBe("worktree");
   });
 
   it("isolation defaults to undefined when omitted", () => {
-    writeAgent("no-isolation", `---
+    writeAgent(
+      "no-isolation",
+      `---
 description: Normal
 ---
 
-Normal.`);
+Normal.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("no-isolation")!.isolation).toBeUndefined();
   });
 
   it("rejects invalid isolation mode", () => {
-    writeAgent("bad-isolation", `---
+    writeAgent(
+      "bad-isolation",
+      `---
 isolation: docker
 ---
 
-Bad isolation.`);
+Bad isolation.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("bad-isolation")!.isolation).toBeUndefined();
@@ -852,12 +1044,15 @@ Bad isolation.`);
   // config outranks tool-call params, so it turns a caller's "worktree" back
   // off. That is why it must survive parsing as "off" rather than undefined.
   it("parses isolation: off", () => {
-    writeAgent("no-wt", `---
+    writeAgent(
+      "no-wt",
+      `---
 description: Never worktree
 isolation: off
 ---
 
-No worktree.`);
+No worktree.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("no-wt")!.isolation).toBe("off");
@@ -871,11 +1066,14 @@ No worktree.`);
     ["none", "isolation: none"],
     ["no", "isolation: no"],
   ])("accepts %s as a spelling of off", (name, line) => {
-    writeAgent(`off-${name}`, `---
+    writeAgent(
+      `off-${name}`,
+      `---
 ${line}
 ---
 
-Off.`);
+Off.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get(`off-${name}`)!.isolation).toBe("off");
@@ -885,17 +1083,23 @@ Off.`);
   // extension load — pi exited 1 before the TUI. Regression for #212.
   it("skips a file with malformed frontmatter and still loads the others", () => {
     // Unquoted `description` containing ": " — the shape Claude Code tolerates.
-    writeAgent("broken", `---
+    writeAgent(
+      "broken",
+      `---
 name: broken
 description: Use this: that
 ---
 
-Broken body.`);
-    writeAgent("good", `---
+Broken body.`,
+    );
+    writeAgent(
+      "good",
+      `---
 description: Still loads
 ---
 
-Good body.`);
+Good body.`,
+    );
 
     const result = loadCustomAgents(tmpDir);
 
@@ -910,7 +1114,7 @@ Good body.`);
 
       loadCustomAgents(tmpDir);
 
-      const message = warn.mock.calls.map(args => String(args[0])).join("\n");
+      const message = warn.mock.calls.map((args) => String(args[0])).join("\n");
       expect(message).toContain(join(tmpDir, ".pi", "agents", "broken.md"));
       expect(message).toContain("Nested mappings are not allowed");
     } finally {
@@ -930,7 +1134,7 @@ Good body.`);
       const result = loadCustomAgents(tmpDir);
 
       expect(result.get("dup")?.description).toBe("Earlier definition");
-      const message = warn.mock.calls.map(args => String(args[0])).join("\n");
+      const message = warn.mock.calls.map((args) => String(args[0])).join("\n");
       expect(message).toContain(`Agent "dup" now loads from ${join(tmpDir, ".agents", "agents", "dup.md")} instead`);
     } finally {
       warn.mockRestore();
@@ -947,7 +1151,7 @@ Good body.`);
 
       loadCustomAgents(tmpDir);
 
-      const message = warn.mock.calls.map(args => String(args[0])).join("\n");
+      const message = warn.mock.calls.map((args) => String(args[0])).join("\n");
       expect(message).toContain("Skipping agent file");
       expect(message).not.toContain("now loads from");
     } finally {
@@ -962,7 +1166,7 @@ Good body.`);
 
       loadCustomAgents(tmpDir);
 
-      const message = warn.mock.calls.map(args => String(args[0])).join("\n");
+      const message = warn.mock.calls.map((args) => String(args[0])).join("\n");
       expect(message).toContain("Skipping agent file");
       expect(message).not.toContain("now loads from");
     } finally {
@@ -1036,10 +1240,7 @@ Good body.`);
     try {
       const globalAgentsDir = join(altAgentDir, "agents");
       mkdirSync(globalAgentsDir, { recursive: true });
-      writeFileSync(
-        join(globalAgentsDir, "via-env.md"),
-        "---\ndescription: Discovered via env var\n---\n\nTest body.",
-      );
+      writeFileSync(join(globalAgentsDir, "via-env.md"), "---\ndescription: Discovered via env var\n---\n\nTest body.");
 
       const result = loadCustomAgents(tmpDir);
 
@@ -1076,8 +1277,9 @@ Good body.`);
     });
 
     it("preserves the full built-in set", () => {
-      expect(roundTrip({ builtinToolNames: [...BUILTIN_TOOL_NAMES] }).builtinToolNames)
-        .toEqual([...BUILTIN_TOOL_NAMES]);
+      expect(roundTrip({ builtinToolNames: [...BUILTIN_TOOL_NAMES] }).builtinToolNames).toEqual([
+        ...BUILTIN_TOOL_NAMES,
+      ]);
     });
 
     it("preserves an empty tool list instead of widening it to every built-in", () => {
@@ -1154,8 +1356,7 @@ Good body.`);
 
     it("preserves allowed_subagents in both its list and `all` forms", () => {
       expect(roundTrip({ allowedSubagents: "all" }).allowedSubagents).toBe("all");
-      expect(roundTrip({ allowedSubagents: ["Explore", "Plan"] }).allowedSubagents)
-        .toEqual(["Explore", "Plan"]);
+      expect(roundTrip({ allowedSubagents: ["Explore", "Plan"] }).allowedSubagents).toEqual(["Explore", "Plan"]);
     });
 
     it("preserves a description containing a colon", () => {

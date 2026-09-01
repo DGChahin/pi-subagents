@@ -12,31 +12,101 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  getAgentDir,
+  getSettingsListTheme,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
+import {
+  buildNewAgentFile,
+  disableInContent,
+  enableInContent,
+  isEmptyStub,
+  locateAgentFile,
+  personalAgentsDir,
+  projectAgentsDir,
+  serializeAgentFile,
+} from "./agent-file-toggle.js";
 import { AgentManager } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
+import {
+  getAgentConversation,
+  getDefaultMaxTurns,
+  getGraceTurns,
+  getRememberAgents,
+  normalizeMaxTurns,
+  resolveEffectiveMaxTurns,
+  SUBAGENT_TOOL_NAMES,
+  setDefaultMaxTurns,
+  setGraceTurns,
+  setRememberAgents,
+  steerAgent,
+} from "./agent-runner.js";
+import {
+  BUILTIN_TOOL_NAMES,
+  getAgentConfig,
+  getAllTypes,
+  getAvailableTypes,
+  getConfig,
+  getFallbackSubagent,
+  isDefaultsDisabled,
+  NO_FALLBACK,
+  registerAgents,
+  resolveSpawnType,
+  resolveType,
+  setDefaultsDisabled,
+  setFallbackSubagent,
+} from "./agent-types.js";
 import { suppressAssistantThinkingRows } from "./assistant-thinking-suppression.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { type AgentRunCompletion, GroupJoinManager } from "./group-join.js";
 import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
-import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
+import {
+  describeMention,
+  handleBase,
+  isReservedHandle,
+  parseMention,
+  resolveHandleToType,
+  stripAgentPrefix,
+} from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import {
+  createOutputFilePath,
+  ensureOutputFile,
+  getOutputTranscriptDefault,
+  setOutputTranscriptDefault,
+  streamToOutputFile,
+  writeInitialEntry,
+} from "./output-file.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
-import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
+import {
+  applyAndEmitLoaded,
+  loadSettings,
+  type SubagentsSettings,
+  saveAndEmitChanged,
+  type ToolDescriptionMode,
+} from "./settings.js";
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { suppressToolExecutionRows } from "./tool-row-suppression.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType } from "./types.js";
+import {
+  type AgentConfig,
+  type AgentInvocation,
+  type AgentMentionMode,
+  type AgentRecord,
+  type JoinMode,
+  type NotificationDetails,
+  type SubagentType,
+} from "./types.js";
 import {
   ACTIVITY_ENTRY,
   ACTIVITY_FINAL_ENTRY,
@@ -67,7 +137,16 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
-import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage, type UsageDelta } from "./usage.js";
+import {
+  addUsage,
+  getLifetimeCost,
+  getLifetimeTotal,
+  getSessionContextPercent,
+  type LifetimeUsage,
+  PendingUsagePool,
+  toReportedUsage,
+  type UsageDelta,
+} from "./usage.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
 
 // ---- Shared helpers ----
@@ -127,7 +206,10 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
         state.activeTools.set(activity.toolName + "_" + Date.now(), activity.toolName);
       } else {
         for (const [key, name] of state.activeTools) {
-          if (name === activity.toolName) { state.activeTools.delete(key); break; }
+          if (name === activity.toolName) {
+            state.activeTools.delete(key);
+            break;
+          }
         }
         state.toolUses++;
       }
@@ -170,11 +252,16 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 /** Human-readable status label for agent completion. */
 function getStatusLabel(status: string, error?: string): string {
   switch (status) {
-    case "error": return `Error: ${error ?? "unknown"}`;
-    case "aborted": return "Aborted (max turns exceeded)";
-    case "steered": return "Wrapped up (turn limit)";
-    case "stopped": return "Stopped";
-    default: return "Done";
+    case "error":
+      return `Error: ${error ?? "unknown"}`;
+    case "aborted":
+      return "Aborted (max turns exceeded)";
+    case "steered":
+      return "Wrapped up (turn limit)";
+    case "stopped":
+      return "Stopped";
+    default:
+      return "Done";
   }
 }
 
@@ -204,11 +291,17 @@ function formatTaskNotification(record: AgentRecord, showCost = false): string {
     `<result>Stored. Use get_subagent_result with task-id for full output.</result>`,
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** Build notification details for the custom message renderer. */
-function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, activity?: AgentActivity): NotificationDetails {
+function buildNotificationDetails(
+  record: AgentRecord,
+  resultMaxLen: number,
+  activity?: AgentActivity,
+): NotificationDetails {
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
 
   return {
@@ -265,9 +358,7 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
     const noExtensionTools = cfg?.isolated === true || cfg?.extensions === false;
     return noExtensionTools ? "none" : "no built-ins, extension tools only";
   }
-  const isFullSet =
-    tools.length === BUILTIN_TOOL_NAMES.length
-    && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t));
+  const isFullSet = tools.length === BUILTIN_TOOL_NAMES.length && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t));
   return isFullSet ? "*" : tools.join(", ");
 }
 
@@ -440,9 +531,7 @@ export default function (pi: ExtensionAPI) {
       const state = activityCards.getForRecord(record);
       if (!state || (state.status !== "running" && state.status !== "queued")) continue;
       const status: ActivityCardData["status"] =
-        detachActive && (record.status === "running" || record.status === "queued")
-          ? "detached"
-          : record.status;
+        detachActive && (record.status === "running" || record.status === "queued") ? "detached" : record.status;
       const snapshot: ActivityCardData = {
         ...activityCardSnapshot(record, activityCards),
         status,
@@ -454,69 +543,64 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ---- Register custom notification renderer ----
-  pi.registerMessageRenderer<NotificationDetails>(
-    "subagent-notification",
-    (message, { expanded }, theme) => {
-      const d = message.details;
-      if (!d) return undefined;
+  pi.registerMessageRenderer<NotificationDetails>("subagent-notification", (message, { expanded }, theme) => {
+    const d = message.details;
+    if (!d) return undefined;
 
-      function renderOne(d: NotificationDetails): string {
-        const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
-        const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-        const statusText = isError ? d.status
-          : d.status === "steered" ? "completed (steered)"
-          : "completed";
+    function renderOne(d: NotificationDetails): string {
+      const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
+      const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+      const statusText = isError ? d.status : d.status === "steered" ? "completed (steered)" : "completed";
 
-        // Line 1: icon + agent description + status
-        let line = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
+      // Line 1: icon + agent description + status
+      let line = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
 
-        // Line 2: stats
-        const parts: string[] = [];
-        if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
-        if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
-        if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
-        if (showCost) {
-          const costText = formatCost(d.totalCost ?? 0);
-          if (costText) parts.push(costText);
-        }
-        if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
-        if (parts.length) {
-          line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
-        }
-
-        // Line 3: result preview (collapsed) or full (expanded)
-        if (expanded) {
-          const lines = d.resultPreview.split("\n").slice(0, 30);
-          for (const l of lines) line += "\n" + theme.fg("dim", `  ${l}`);
-        } else {
-          const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
-          line += "\n  " + theme.fg("dim", `⎿  ${preview}`);
-        }
-
-        // Line 4: output file link (if present)
-        if (d.outputFile) {
-          line += "\n  " + theme.fg("muted", `transcript: ${d.outputFile}`);
-        }
-
-        return line;
+      // Line 2: stats
+      const parts: string[] = [];
+      if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
+      if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
+      if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
+      if (showCost) {
+        const costText = formatCost(d.totalCost ?? 0);
+        if (costText) parts.push(costText);
+      }
+      if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
+      if (parts.length) {
+        line += "\n  " + parts.map((p) => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
       }
 
-      const all = [d, ...(d.others ?? [])];
-      const rendered = all.map(renderOne);
-      // A group of agents lands as one notification, and the number a user wants
-      // from it is what the batch cost — not four figures to add up by hand.
-      // Derived from the per-agent details rather than carried alongside them:
-      // one source, so the total can never disagree with the rows above it.
-      if (showCost && all.length > 1) {
-        const total = formatCost(all.reduce((sum, a) => sum + (a.totalCost ?? 0), 0));
-        if (total) {
-          const tokens = all.reduce((sum, a) => sum + a.totalTokens, 0);
-          rendered.unshift(theme.fg("dim", `${all.length} agents · ${formatTokens(tokens)} · ${total}`));
-        }
+      // Line 3: result preview (collapsed) or full (expanded)
+      if (expanded) {
+        const lines = d.resultPreview.split("\n").slice(0, 30);
+        for (const l of lines) line += "\n" + theme.fg("dim", `  ${l}`);
+      } else {
+        const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
+        line += "\n  " + theme.fg("dim", `⎿  ${preview}`);
       }
-      return new Text(rendered.join("\n"), 0, 0);
+
+      // Line 4: output file link (if present)
+      if (d.outputFile) {
+        line += "\n  " + theme.fg("muted", `transcript: ${d.outputFile}`);
+      }
+
+      return line;
     }
-  );
+
+    const all = [d, ...(d.others ?? [])];
+    const rendered = all.map(renderOne);
+    // A group of agents lands as one notification, and the number a user wants
+    // from it is what the batch cost — not four figures to add up by hand.
+    // Derived from the per-agent details rather than carried alongside them:
+    // one source, so the total can never disagree with the rows above it.
+    if (showCost && all.length > 1) {
+      const total = formatCost(all.reduce((sum, a) => sum + (a.totalCost ?? 0), 0));
+      if (total) {
+        const tokens = all.reduce((sum, a) => sum + a.totalTokens, 0);
+        rendered.unshift(theme.fg("dim", `${all.length} agents · ${formatTokens(tokens)} · ${total}`));
+      }
+    }
+    return new Text(rendered.join("\n"), 0, 0);
+  });
 
   // Read directly rather than waiting for applyAndEmitLoaded below: this decides
   // the initial load, which happens hundreds of lines before settings are applied.
@@ -538,7 +622,9 @@ export default function (pi: ExtensionAPI) {
   // ---- Usage reporting (both off by default; see SubagentsSettings) ----
   /** Attach subagent spend to tool results, so the parent session counts it. */
   let reportUsage = false;
-  function isReportUsageEnabled(): boolean { return reportUsage; }
+  function isReportUsageEnabled(): boolean {
+    return reportUsage;
+  }
   function setReportUsage(b: boolean): void {
     reportUsage = b;
     // Whatever accumulated while it was on is stale the moment it goes off:
@@ -548,7 +634,9 @@ export default function (pi: ExtensionAPI) {
   }
   /** Show `~$X` next to token counts in the subagent surfaces. */
   let showCost = false;
-  function isShowCostEnabled(): boolean { return showCost; }
+  function isShowCostEnabled(): boolean {
+    return showCost;
+  }
   function setShowCost(b: boolean): void {
     showCost = b;
     activityCards.setShowCost(b);
@@ -584,10 +672,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function isCurrentCompletion(completion: HeldCompletion): boolean {
-    return completion.record.runRevision === completion.revision
-      && completion.record.pendingDeliveryRevision === completion.revision
-      && completion.record.resultConsumed !== true
-      && completion.generation === sessionGeneration;
+    return (
+      completion.record.runRevision === completion.revision &&
+      completion.record.pendingDeliveryRevision === completion.revision &&
+      completion.record.resultConsumed !== true &&
+      completion.generation === sessionGeneration
+    );
   }
 
   function scheduleNudge(key: string, completions: readonly HeldCompletion[], delay = NUDGE_HOLD_MS): void {
@@ -597,8 +687,9 @@ export default function (pi: ExtensionAPI) {
       pendingNudges.delete(key);
       for (const previousCompletion of previous.completions) {
         const replaced = completions.some(
-          completion => completion.record.id === previousCompletion.record.id
-            && completion.revision === previousCompletion.revision,
+          (completion) =>
+            completion.record.id === previousCompletion.record.id &&
+            completion.revision === previousCompletion.revision,
         );
         if (!replaced) clearMatchingPendingRevision(previousCompletion);
       }
@@ -614,7 +705,11 @@ export default function (pi: ExtensionAPI) {
       const pending = pendingNudges.get(key);
       if (!pending || pending.timer !== timer) return;
       pendingNudges.delete(key);
-      try { queueCompletionDelivery(pending.completions); } catch { /* ignore stale completion side-effect errors */ }
+      try {
+        queueCompletionDelivery(pending.completions);
+      } catch {
+        /* ignore stale completion side-effect errors */
+      }
     }, delay);
     pendingNudges.set(key, { timer, completions: current });
   }
@@ -622,14 +717,14 @@ export default function (pi: ExtensionAPI) {
   function discardCompletionDelivery(record: AgentRecord, revision: number): void {
     mainCardPendingRuns.delete(mainCardRunKey(record.id, revision));
     currentBatchAgents = currentBatchAgents.filter(
-      completion => completion.id !== record.id || completion.revision !== revision,
+      (completion) => completion.id !== record.id || completion.revision !== revision,
     );
     groupJoin.consume(record.id, revision);
     if (record.runRevision === revision) record.groupId = undefined;
 
     for (const [key, pending] of pendingNudges) {
       const completions = pending.completions.filter(
-        completion => completion.record.id !== record.id || completion.revision !== revision,
+        (completion) => completion.record.id !== record.id || completion.revision !== revision,
       );
       if (completions.length === pending.completions.length) continue;
       if (completions.length === 0) {
@@ -693,23 +788,26 @@ export default function (pi: ExtensionAPI) {
       const records = deliverable.map(({ record }) => record);
       if (records.length === 0) return;
 
-      const notifications = records.map(record => formatTaskNotification(record, showCost)).join("\n\n");
-      const partial = deliverable.some(completion => completion.partial);
+      const notifications = records.map((record) => formatTaskNotification(record, showCost)).join("\n\n");
+      const partial = deliverable.some((completion) => completion.partial);
       const [first, ...rest] = records;
       const details = buildNotificationDetails(first, 160, agentActivity.get(first.id));
       if (rest.length > 0) {
-        details.others = rest.map(record => buildNotificationDetails(record, 160, agentActivity.get(record.id)));
+        details.others = rest.map((record) => buildNotificationDetails(record, 160, agentActivity.get(record.id)));
       }
       const label = partial
         ? `${records.length} agent(s) finished; other grouped agents are still running`
         : `${records.length} agent(s) finished`;
 
-      pi.sendMessage<NotificationDetails>({
-        customType: "subagent-notification",
-        content: `Background agent completion: ${label}\n\n${notifications}`,
-        display: false,
-        details,
-      }, { deliverAs: "followUp", triggerTurn: true });
+      pi.sendMessage<NotificationDetails>(
+        {
+          customType: "subagent-notification",
+          content: `Background agent completion: ${label}\n\n${notifications}`,
+          display: false,
+          details,
+        },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
       for (const completion of deliverable) {
         mainCardPendingRuns.delete(mainCardRunKey(completion.record.id, completion.revision));
         const held = heldCompletions.get(completion.record.id);
@@ -740,24 +838,21 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ---- Group join manager ----
-  const groupJoin = new GroupJoinManager(
-    (completedRuns, partial) => {
-      const completions = completedRuns.map(({ record, revision }) => ({
-        record,
-        revision,
-        partial,
-        generation: record.parentSessionGeneration ?? sessionGeneration,
-      }));
-      const current = completions.filter(isCurrentCompletion);
-      for (const { record } of current) {
-        agentActivity.delete(record.id);
-        fleet.onAgentFinished(record.id);
-      }
-      const groupKey = `group:${completions.map(({ record, revision }) => `${record.id}:${revision}`).join(",")}`;
-      scheduleNudge(groupKey, completions);
-    },
-    30_000,
-  );
+  const groupJoin = new GroupJoinManager((completedRuns, partial) => {
+    const completions = completedRuns.map(({ record, revision }) => ({
+      record,
+      revision,
+      partial,
+      generation: record.parentSessionGeneration ?? sessionGeneration,
+    }));
+    const current = completions.filter(isCurrentCompletion);
+    for (const { record } of current) {
+      agentActivity.delete(record.id);
+      fleet.onAgentFinished(record.id);
+    }
+    const groupKey = `group:${completions.map(({ record, revision }) => `${record.id}:${revision}`).join(",")}`;
+    scheduleNudge(groupKey, completions);
+  }, 30_000);
 
   /** Helper: build event data for lifecycle events from an AgentRecord. */
   function buildEventData(record: AgentRecord) {
@@ -768,9 +863,7 @@ export default function (pi: ExtensionAPI) {
     // any message_end fired), preserving prior payload shape.
     const u = record.lifetimeUsage;
     const total = getLifetimeTotal(u);
-    const tokens = total > 0
-      ? { input: u.input, output: u.output, total }
-      : undefined;
+    const tokens = total > 0 ? { input: u.input, output: u.output, total } : undefined;
     // The whole run's spend as a pi `Usage` — pi's convention for handing spend
     // to a consumer, so `usage.cost.total` and `usage.cacheRead` are where a
     // listener already expects them and anything pi adds to `Usage` arrives
@@ -831,9 +924,14 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     pi.appendEntry("subagents:record", {
-      id: record.id, type: record.type, description: record.description,
-      status: record.status, result: record.result, error: record.error,
-      startedAt: record.startedAt, completedAt: record.completedAt,
+      id: record.id,
+      type: record.type,
+      description: record.description,
+      status: record.status,
+      result: record.result,
+      error: record.error,
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
     });
 
     const revision = record.runRevision;
@@ -851,12 +949,12 @@ export default function (pi: ExtensionAPI) {
 
     // If this agent is pending batch finalization (debounce window still open),
     // don't send an individual nudge — finalizeBatch will pick it up retroactively.
-    if (currentBatchAgents.some(a => a.id === record.id && a.revision === revision)) {
+    if (currentBatchAgents.some((a) => a.id === record.id && a.revision === revision)) {
       return;
     }
 
     const result = groupJoin.onAgentComplete({ record, revision });
-    if (result === 'pass') {
+    if (result === "pass") {
       sendIndividualNudge(record, revision);
     }
     // 'held' → do nothing, group will fire later
@@ -884,54 +982,64 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  const manager = new AgentManager(handleAgentComplete, undefined, (record) => {
-    if (record.parentAgentId) return;
-    // This fallback supports records created without a generation capture hook.
-    // Queue start must not overwrite the dispatch identity already on the record.
-    record.parentSessionGeneration ??= sessionGeneration;
-    if (record.parentSessionGeneration !== sessionGeneration) return;
-    // Agent-tool spawns refresh these surfaces in their tool handler, but RPC,
-    // mention, and scheduler spawns enter through the manager directly.
-    if (currentCtx?.hasUI) {
-      fleet.ensureTimer();
-      fleet.update();
-    }
-    // Emit started event when agent transitions to running (including from queue).
-    pi.events.emit("subagents:started", {
-      id: record.id,
-      type: record.type,
-      description: record.description,
-    });
-  }, (record, info) => {
-    if (record.parentAgentId || record.parentSessionGeneration !== sessionGeneration) return;
-    pi.events.emit("subagents:compacted", {
-      id: record.id,
-      type: record.type,
-      description: record.description,
-      reason: info.reason,
-      tokensBefore: info.tokensBefore,
-      compactionCount: record.compactionCount,
-    });
-  }, () => sessionGeneration, (record) => {
-    if (!cardBelongsToCurrentSession(record)) return;
-    activityCards.begin(record);
-    activityTicker.start();
-    pi.appendEntry<ActivityCardData>(ACTIVITY_ENTRY, toActivityCardData(record));
-  }, (record) => {
-    if (!cardBelongsToCurrentSession(record)) return;
-    activityCards.finish(record);
-    pi.appendEntry<ActivityCardData>(ACTIVITY_FINAL_ENTRY, activityCardSnapshot(record, activityCards));
-  }, (record, event: AgentActivityEvent) => {
-    if (!cardBelongsToCurrentSession(record)) return;
-    activityCards.apply(record, event);
-    if (event.type === "usage") syncCardAncestors(record);
-  }, (_record, usage) => {
-    // Every assistant message from every agent — nested included, exactly once.
-    // Parked here until a tool result can carry it back to the parent session;
-    // see `PendingUsagePool`. Skipped entirely when the feature is off, so no
-    // pool grows in a session that will never drain it.
-    if (reportUsage) pendingUsage.add(usage);
-  });
+  const manager = new AgentManager(
+    handleAgentComplete,
+    undefined,
+    (record) => {
+      if (record.parentAgentId) return;
+      // This fallback supports records created without a generation capture hook.
+      // Queue start must not overwrite the dispatch identity already on the record.
+      record.parentSessionGeneration ??= sessionGeneration;
+      if (record.parentSessionGeneration !== sessionGeneration) return;
+      // Agent-tool spawns refresh these surfaces in their tool handler, but RPC,
+      // mention, and scheduler spawns enter through the manager directly.
+      if (currentCtx?.hasUI) {
+        fleet.ensureTimer();
+        fleet.update();
+      }
+      // Emit started event when agent transitions to running (including from queue).
+      pi.events.emit("subagents:started", {
+        id: record.id,
+        type: record.type,
+        description: record.description,
+      });
+    },
+    (record, info) => {
+      if (record.parentAgentId || record.parentSessionGeneration !== sessionGeneration) return;
+      pi.events.emit("subagents:compacted", {
+        id: record.id,
+        type: record.type,
+        description: record.description,
+        reason: info.reason,
+        tokensBefore: info.tokensBefore,
+        compactionCount: record.compactionCount,
+      });
+    },
+    () => sessionGeneration,
+    (record) => {
+      if (!cardBelongsToCurrentSession(record)) return;
+      activityCards.begin(record);
+      activityTicker.start();
+      pi.appendEntry<ActivityCardData>(ACTIVITY_ENTRY, toActivityCardData(record));
+    },
+    (record) => {
+      if (!cardBelongsToCurrentSession(record)) return;
+      activityCards.finish(record);
+      pi.appendEntry<ActivityCardData>(ACTIVITY_FINAL_ENTRY, activityCardSnapshot(record, activityCards));
+    },
+    (record, event: AgentActivityEvent) => {
+      if (!cardBelongsToCurrentSession(record)) return;
+      activityCards.apply(record, event);
+      if (event.type === "usage") syncCardAncestors(record);
+    },
+    (_record, usage) => {
+      // Every assistant message from every agent — nested included, exactly once.
+      // Parked here until a tool result can carry it back to the parent session;
+      // see `PendingUsagePool`. Skipped entirely when the feature is off, so no
+      // pool grows in a session that will never drain it.
+      if (reportUsage) pendingUsage.add(usage);
+    },
+  );
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1051,7 +1159,7 @@ export default function (pi: ExtensionAPI) {
   function startScheduler(ctx: ExtensionContext) {
     try {
       const sessionId = ctx.sessionManager?.getSessionId?.();
-      if (!sessionId) return;  // sessionId not yet available — try again on next event
+      if (!sessionId) return; // sessionId not yet available — try again on next event
       const path = resolveStorePath(ctx.cwd, sessionId);
       const store = new ScheduleStore(path);
       scheduler.start(pi, ctx, manager, store);
@@ -1113,12 +1221,12 @@ export default function (pi: ExtensionAPI) {
     // — print mode has no such method, and RPC mode's is a no-op.
     if (ctx.mode === "tui" && !mentionProviderRegistered) {
       mentionProviderRegistered = true;
-      ctx.ui.addAutocompleteProvider(current =>
+      ctx.ui.addAutocompleteProvider((current) =>
         createMentionProvider(
           current,
           // Plain text, not renderAgentName: the same label activity cards and FleetView
           // show, but the autocomplete description cannot carry ANSI.
-          () => mentionRoster(manager, mentionTypes(), type => getConfig(type).displayName),
+          () => mentionRoster(manager, mentionTypes(), (type) => getConfig(type).displayName),
           isAgentMentionsEnabled,
         ),
       );
@@ -1127,14 +1235,18 @@ export default function (pi: ExtensionAPI) {
 
   /** Agent types `@` can start, in the shape the roster wants. */
   const mentionTypes = (): TypeInfo[] =>
-    getAvailableTypes().map(name => ({ name, description: getAgentConfig(name)?.description ?? name }));
+    getAvailableTypes().map((name) => ({ name, description: getAgentConfig(name)?.description ?? name }));
 
   /** Resolve config-owned isolation controls for trusted mention dispatches. */
   const mentionIsolationOptions = (type: SubagentType) => {
-    const invocation = resolveAgentInvocationConfig(getAgentConfig(type), {}, {
-      worktreeAllowed: isWorktreeIsolationEnabled(),
-      defaultRunInBackground: true,
-    });
+    const invocation = resolveAgentInvocationConfig(
+      getAgentConfig(type),
+      {},
+      {
+        worktreeAllowed: isWorktreeIsolationEnabled(),
+        defaultRunInBackground: true,
+      },
+    );
     return { isolated: invocation.isolated, isolation: invocation.isolation };
   };
 
@@ -1184,8 +1296,7 @@ export default function (pi: ExtensionAPI) {
     // As typed first, so an agent actually called `agent-foo` wins over Claude
     // Code's `@agent-` + `foo` spelling rather than being shadowed by it.
     const alias = stripAgentPrefix(mention.handle);
-    const resolved = manager.resolveMention(mention.handle)
-      ?? (alias ? manager.resolveMention(alias) : undefined);
+    const resolved = manager.resolveMention(mention.handle) ?? (alias ? manager.resolveMention(alias) : undefined);
 
     // Steering and resuming are direct in every mode, so headless they are not
     // available at all. Falling through here rather than dropping to the start
@@ -1295,10 +1406,7 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         // The type is already settled above, so what is left is a spawn-time
         // failure: a strict worktree-isolation error, an unusable cwd.
-        ctx.ui.notify(
-          `Could not resume ${target}: ${err instanceof Error ? err.message : String(err)}`,
-          "warning",
-        );
+        ctx.ui.notify(`Could not resume ${target}: ${err instanceof Error ? err.message : String(err)}`, "warning");
       }
       return { action: "handled" };
     }
@@ -1306,8 +1414,9 @@ export default function (pi: ExtensionAPI) {
     // No agent under that handle — but the name may still be an agent type, in
     // which case the mention starts one.
     const typeHandle = mention.handle;
-    const type = resolveHandleToType(typeHandle, getAvailableTypes())
-      ?? (alias ? resolveHandleToType(alias, getAvailableTypes()) : undefined);
+    const type =
+      resolveHandleToType(typeHandle, getAvailableTypes()) ??
+      (alias ? resolveHandleToType(alias, getAvailableTypes()) : undefined);
     if (!type) return { action: "continue" };
 
     // Claude Code never starts the agent itself: `@agent-<type>` becomes an
@@ -1333,26 +1442,22 @@ export default function (pi: ExtensionAPI) {
       // Not awaited: the clone runs a full model turn, and prompt() is blocked
       // until this hook returns. The user gets their prompt back immediately
       // and the agent appears in its activity card and FleetView when it starts.
-      void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool })
-        .then((result) => {
-          if (result.spawned) return;
-          // A clone that could not run must not swallow the mention: start the
-          // agent the direct way rather than leaving the user with a toast and
-          // nothing running.
-          try {
-            spawnTopLevel(pi, ctx, type, mention.message, {
-              description: describeMention(mention.message),
-              isBackground: true,
-              ...mentionIsolationOptions(type),
-            });
-            ctx.ui.notify(`Started ${label} directly — ${result.error}`, "warning");
-          } catch (err) {
-            ctx.ui.notify(
-              `Could not start ${label}: ${err instanceof Error ? err.message : String(err)}`,
-              "error",
-            );
-          }
-        });
+      void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool }).then((result) => {
+        if (result.spawned) return;
+        // A clone that could not run must not swallow the mention: start the
+        // agent the direct way rather than leaving the user with a toast and
+        // nothing running.
+        try {
+          spawnTopLevel(pi, ctx, type, mention.message, {
+            description: describeMention(mention.message),
+            isBackground: true,
+            ...mentionIsolationOptions(type),
+          });
+          ctx.ui.notify(`Started ${label} directly — ${result.error}`, "warning");
+        } catch (err) {
+          ctx.ui.notify(`Could not start ${label}: ${err instanceof Error ? err.message : String(err)}`, "error");
+        }
+      });
       return { action: "handled" };
     }
 
@@ -1369,7 +1474,10 @@ export default function (pi: ExtensionAPI) {
       });
       ctx.ui.notify(`Started @${handleBase(type)}`, "info");
     } catch (err) {
-      ctx.ui.notify(`Could not start @${handleBase(type)}: ${err instanceof Error ? err.message : String(err)}`, "error");
+      ctx.ui.notify(
+        `Could not start @${handleBase(type)}: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
     }
     return { action: "handled" };
   });
@@ -1394,7 +1502,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_end", (event) => {
     if (!mainCard) return;
-    const assistant = [...event.messages].reverse().find(message => message.role === "assistant");
+    const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
     if (!assistant) {
       mainOutcome = { status: "completed" };
     } else if (assistant.stopReason === "error") {
@@ -1564,20 +1672,31 @@ export default function (pi: ExtensionAPI) {
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
   const fleet = new FleetList(manager, agentActivity, isShowCostEnabled);
   let fleetViewEnabled = true;
-  function isFleetViewEnabled(): boolean { return fleetViewEnabled; }
-  function setFleetViewEnabled(b: boolean): void { fleetViewEnabled = b; fleet.setEnabled(b); }
+  function isFleetViewEnabled(): boolean {
+    return fleetViewEnabled;
+  }
+  function setFleetViewEnabled(b: boolean): void {
+    fleetViewEnabled = b;
+    fleet.setEnabled(b);
+  }
 
   // Claude Code-style `@handle message` prompt mentions. Read live by both the
   // `input` hook and the stacked autocomplete provider, so the toggle applies
   // immediately — the provider itself can never be unregistered (pi's wrapper
   // list is append-only), it just delegates everything when this is off.
   let agentMentionMode: AgentMentionMode = "model";
-  function getAgentMentionMode(): AgentMentionMode { return agentMentionMode; }
-  function setAgentMentionMode(mode: AgentMentionMode): void { agentMentionMode = mode; }
+  function getAgentMentionMode(): AgentMentionMode {
+    return agentMentionMode;
+  }
+  function setAgentMentionMode(mode: AgentMentionMode): void {
+    agentMentionMode = mode;
+  }
   // `model` and `direct` differ only in who starts a not-yet-running agent, so
   // everything that just asks "are mentions live at all" — the suggestion list,
   // the steer and resume branches — reads this instead of the mode.
-  function isAgentMentionsEnabled(): boolean { return agentMentionMode !== "off"; }
+  function isAgentMentionsEnabled(): boolean {
+    return agentMentionMode !== "off";
+  }
 
   // Project/global default for writing the subagent .output transcript lives in
   // output-file.ts (both spawn paths read it). A custom agent's
@@ -1585,15 +1704,23 @@ export default function (pi: ExtensionAPI) {
   // is silent, this default applies. Read live at spawn time.
 
   // ---- Join mode configuration ----
-  let defaultJoinMode: JoinMode = 'smart';
-  function getDefaultJoinMode(): JoinMode { return defaultJoinMode; }
-  function setDefaultJoinMode(mode: JoinMode) { defaultJoinMode = mode; }
+  let defaultJoinMode: JoinMode = "smart";
+  function getDefaultJoinMode(): JoinMode {
+    return defaultJoinMode;
+  }
+  function setDefaultJoinMode(mode: JoinMode) {
+    defaultJoinMode = mode;
+  }
 
   // Kept as a settings compatibility sink: top-level Agent dispatch and resume
   // remain background-only in this fork, so persisted false values are ignored
   // and the next settings snapshot canonicalizes the field back to true.
-  function getBackgroundByDefault(): true { return true; }
-  function setBackgroundByDefault(_b: boolean): void { void _b; }
+  function getBackgroundByDefault(): true {
+    return true;
+  }
+  function setBackgroundByDefault(_b: boolean): void {
+    void _b;
+  }
 
   // Master switch for the schedule subagent feature. Defaults to enabled.
   // Read once at extension init (before tool registration) so the Agent tool's
@@ -1602,8 +1729,12 @@ export default function (pi: ExtensionAPI) {
   // immediately, but the schema-level removal only takes effect on next
   // extension load (next pi session). Documented in CHANGELOG/README.
   let schedulingEnabled = true;
-  function isSchedulingEnabled(): boolean { return schedulingEnabled; }
-  function setSchedulingEnabled(b: boolean) { schedulingEnabled = b; }
+  function isSchedulingEnabled(): boolean {
+    return schedulingEnabled;
+  }
+  function setSchedulingEnabled(b: boolean) {
+    schedulingEnabled = b;
+  }
 
   // ---- Disable default agents configuration ----
   // When enabled, the three hardcoded default agents (general-purpose, Explore,
@@ -1622,8 +1753,12 @@ export default function (pi: ExtensionAPI) {
   // swaps in a ~75% smaller one for small/local models (#91). Read once at
   // tool registration — flipping it applies on the next pi session.
   let toolDescriptionMode: ToolDescriptionMode = "full";
-  function getToolDescriptionMode(): ToolDescriptionMode { return toolDescriptionMode; }
-  function setToolDescriptionMode(mode: ToolDescriptionMode): void { toolDescriptionMode = mode; }
+  function getToolDescriptionMode(): ToolDescriptionMode {
+    return toolDescriptionMode;
+  }
+  function setToolDescriptionMode(mode: ToolDescriptionMode): void {
+    toolDescriptionMode = mode;
+  }
 
   // ---- Batch tracking for smart join mode ----
   // Collects background agent IDs spawned in the current turn for smart grouping.
@@ -1640,7 +1775,7 @@ export default function (pi: ExtensionAPI) {
     const batchAgents = [...currentBatchAgents];
     currentBatchAgents = [];
 
-    const smartAgents = batchAgents.filter(a => a.joinMode === 'smart' || a.joinMode === 'group');
+    const smartAgents = batchAgents.filter((a) => a.joinMode === "smart" || a.joinMode === "group");
     if (smartAgents.length >= 2) {
       const groupId = `batch-${++batchCounter}`;
       const completions = smartAgents.flatMap(({ id, revision }) => {
@@ -1654,11 +1789,7 @@ export default function (pi: ExtensionAPI) {
       for (const completion of completions) {
         const { record, revision } = completion;
         record.groupId = groupId;
-        if (
-          record.completedAt != null
-          && !record.resultConsumed
-          && record.pendingDeliveryRevision === revision
-        ) {
+        if (record.completedAt != null && !record.resultConsumed && record.pendingDeliveryRevision === revision) {
           groupJoin.onAgentComplete(completion);
         }
       }
@@ -1668,10 +1799,10 @@ export default function (pi: ExtensionAPI) {
       for (const { id, revision } of batchAgents) {
         const record = manager.getRecord(id);
         if (
-          record?.runRevision === revision
-          && record.completedAt != null
-          && !record.resultConsumed
-          && record.pendingDeliveryRevision === revision
+          record?.runRevision === revision &&
+          record.completedAt != null &&
+          !record.resultConsumed &&
+          record.pendingDeliveryRevision === revision
         ) {
           sendIndividualNudge(record, revision);
         }
@@ -1723,7 +1854,7 @@ export default function (pi: ExtensionAPI) {
     const record = manager.resumeInBackground(id, prompt, { ...bgCallbacks, maxTurns: opts.maxTurns });
     if (!record) return undefined;
 
-    if (joinMode != null && joinMode !== 'async') {
+    if (joinMode != null && joinMode !== "async") {
       currentBatchAgents.push({ id, joinMode, revision: record.runRevision });
       if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
       batchFinalizeTimer = setTimeout(finalizeBatch, 100);
@@ -1753,12 +1884,14 @@ export default function (pi: ExtensionAPI) {
   const buildTypeListText = () => {
     const available = getAvailableTypes();
 
-    return available.map((name) => {
-      const cfg = getAgentConfig(name);
-      const modelSuffix = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
-      const toolsSuffix = ` (Tools: ${formatToolsSuffix(cfg)})`;
-      return `- ${name}: ${cfg?.description ?? name}${modelSuffix}${toolsSuffix}`;
-    }).join("\n");
+    return available
+      .map((name) => {
+        const cfg = getAgentConfig(name);
+        const modelSuffix = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
+        const toolsSuffix = ` (Tools: ${formatToolsSuffix(cfg)})`;
+        return `- ${name}: ${cfg?.description ?? name}${modelSuffix}${toolsSuffix}`;
+      })
+      .join("\n");
   };
 
   /** First sentence of an agent description — for the compact type list. */
@@ -1769,10 +1902,12 @@ export default function (pi: ExtensionAPI) {
 
   /** Compact type list: one line per agent, first sentence only. */
   const buildCompactTypeListText = () =>
-    getAvailableTypes().map((name) => {
-      const cfg = getAgentConfig(name);
-      return `- ${name}: ${firstSentence(cfg?.description ?? name)} (Tools: ${formatToolsSuffix(cfg)})`;
-    }).join("\n");
+    getAvailableTypes()
+      .map((name) => {
+        const cfg = getAgentConfig(name);
+        return `- ${name}: ${firstSentence(cfg?.description ?? name)} (Tools: ${formatToolsSuffix(cfg)})`;
+      })
+      .join("\n");
 
   /** Derive a short model label from a model string. */
   function getModelLabelFromConfig(model: string): string {
@@ -1794,7 +1929,9 @@ export default function (pi: ExtensionAPI) {
       setBackgroundByDefault,
       setSchedulingEnabled,
       setScopeModels: setScopeModelsEnabled,
-      setStrictAgentFiles: (b) => { strictAgentFiles = b; },
+      setStrictAgentFiles: (b) => {
+        strictAgentFiles = b;
+      },
       setDisableDefaultAgents: setDisableDefaultAgents,
       setToolDescriptionMode: setToolDescriptionMode,
       setFleetView: setFleetViewEnabled,
@@ -1821,14 +1958,13 @@ export default function (pi: ExtensionAPI) {
     schedule: Type.Optional(
       Type.String({
         description:
-          'Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). ' +
+          "Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). " +
           'Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). ' +
-          'Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.',
+          "Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.",
       }),
     ),
   };
-  const scheduleParam: Partial<typeof scheduleParamShape> =
-    isSchedulingEnabled() ? scheduleParamShape : {};
+  const scheduleParam: Partial<typeof scheduleParamShape> = isSchedulingEnabled() ? scheduleParamShape : {};
 
   const scheduleGuideline = isSchedulingEnabled()
     ? `\n- Use \`schedule\` only when the user explicitly asked for scheduled / recurring / delayed execution (e.g. "every Monday", "in an hour"). Don't auto-schedule from vague intent like "monitor X" — run once now or ask.`
@@ -1953,7 +2089,9 @@ Terse command-style prompts produce shallow, generic work.
     if (mode === "custom") {
       const custom = loadCustomToolDescription();
       if (custom) return custom;
-      console.warn('[pi-subagents] toolDescriptionMode is "custom" but no agent-tool-description.md found — using "full"');
+      console.warn(
+        '[pi-subagents] toolDescriptionMode is "custom" but no agent-tool-description.md found — using "full"',
+      );
     }
     return fullAgentToolDescription;
   })();
@@ -2007,12 +2145,13 @@ Terse command-style prompts produce shallow, generic work.
       ),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Background execution is required. Omit this field or set true. Explicit false is rejected."
+          description: "Background execution is required. Omit this field or set true. Explicit false is rejected.",
         }),
       ),
       resume: Type.Optional(
         Type.String({
-          description: "Optional agent ID to resume asynchronously from its previous context. Returns the same ID immediately. An agent can only be resumed after its current run settles and its result is consumed; use steer_subagent to reach one mid-run."
+          description:
+            "Optional agent ID to resume asynchronously from its previous context. Returns the same ID immediately. An agent can only be resumed after its current run settles and its result is consumed; use steer_subagent to reach one mid-run.",
         }),
       ),
       isolated: Type.Optional(
@@ -2046,7 +2185,9 @@ Terse command-style prompts produce shallow, generic work.
           return textResult("Cannot combine `schedule` with `resume` — schedules create fresh agents.");
         }
         if (params.run_in_background === false) {
-          return textResult("Foreground Agent resume is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.");
+          return textResult(
+            "Foreground Agent resume is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.",
+          );
         }
 
         const existing = manager.getRecord(params.resume);
@@ -2059,7 +2200,7 @@ Terse command-style prompts produce shallow, generic work.
         if (existing.status === "running" || existing.status === "queued") {
           return textResult(
             `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
-            `Use steer_subagent to send a message mid-run, or get_subagent_result to check status; the completion callback arrives after settlement.`,
+              `Use steer_subagent to send a message mid-run, or get_subagent_result to check status; the completion callback arrives after settlement.`,
           );
         }
         if (existing.settledRevision !== existing.runRevision) {
@@ -2094,11 +2235,11 @@ Terse command-style prompts produce shallow, generic work.
 
         return textResult(
           `Agent ${isQueued ? "resume queued" : "resumed"} in background.\n` +
-          `Agent ID: ${existing.id}\n` +
-          `Type: ${existing.type}\n` +
-          (resumed.outputFile ? `Output file: ${resumed.outputFile}\n` : "") +
-          (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
-          `\nYou will receive a concise completion callback. Use get_subagent_result for full stored output.`,
+            `Agent ID: ${existing.id}\n` +
+            `Type: ${existing.type}\n` +
+            (resumed.outputFile ? `Output file: ${resumed.outputFile}\n` : "") +
+            (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+            `\nYou will receive a concise completion callback. Use get_subagent_result for full stored output.`,
           {
             displayName: getDisplayName(existing.type),
             description: existing.description,
@@ -2131,9 +2272,10 @@ Terse command-style prompts produce shallow, generic work.
       // Computed at resolution rather than after the run, so both the fresh
       // background and schedule branches carry it. Resume returned above before
       // type resolution because it ignores `subagent_type` entirely.
-      const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
-        ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
-        : "";
+      const fallbackNote =
+        dispatch.ok && dispatch.fellBackFrom !== undefined
+          ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
+          : "";
 
       const displayName = getDisplayName(subagentType);
 
@@ -2145,12 +2287,16 @@ Terse command-style prompts produce shallow, generic work.
         defaultRunInBackground: true,
       });
       if (params.run_in_background === false) {
-        return textResult(params.schedule
-          ? "Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background."
-          : "Foreground Agent execution is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.");
+        return textResult(
+          params.schedule
+            ? "Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background."
+            : "Foreground Agent execution is disabled. Omit `run_in_background` or set it to true, then use get_subagent_result for stored output.",
+        );
       }
       if (!params.schedule && !resolvedConfig.runInBackground) {
-        return textResult("Foreground Agent execution is disabled. Set run_in_background: true in the agent definition, then use get_subagent_result for stored output.");
+        return textResult(
+          "Foreground Agent execution is disabled. Set run_in_background: true in the agent definition, then use get_subagent_result for stored output.",
+        );
       }
 
       // Resolve model from agent config first; tool-call params only fill gaps.
@@ -2203,9 +2349,10 @@ Terse command-style prompts produce shallow, generic work.
 
       const parentModelId = ctx.model?.id;
       const effectiveModelId = model?.id;
-      const modelName = effectiveModelId && effectiveModelId !== parentModelId
-        ? (model?.name ?? effectiveModelId).replace(/^Claude\s+/i, "").toLowerCase()
-        : undefined;
+      const modelName =
+        effectiveModelId && effectiveModelId !== parentModelId
+          ? (model?.name ?? effectiveModelId).replace(/^Claude\s+/i, "").toLowerCase()
+          : undefined;
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
@@ -2236,10 +2383,14 @@ Terse command-style prompts produce shallow, generic work.
           return textResult("Scheduling is disabled in this project. Enable via /agents → Settings → Scheduling.");
         }
         if (params.inherit_context) {
-          return textResult("Cannot combine `schedule` with `inherit_context` — there is no parent conversation at fire time.");
+          return textResult(
+            "Cannot combine `schedule` with `inherit_context` — there is no parent conversation at fire time.",
+          );
         }
         if (!scheduler.isActive()) {
-          return textResult("Scheduler is not active in this session yet. Try again after the session has fully started.");
+          return textResult(
+            "Scheduler is not active in this session yet. Try again after the session has fully started.",
+          );
         }
         try {
           const job = scheduler.addJob({
@@ -2259,8 +2410,8 @@ Terse command-style prompts produce shallow, generic work.
           const next = scheduler.getNextRun(job.id);
           return textResult(
             `${fallbackNote}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
-            `Next run: ${next ?? "(unknown)"}. ` +
-            `Manage via /agents → Scheduled jobs.`,
+              `Next run: ${next ?? "(unknown)"}. ` +
+              `Manage via /agents → Scheduled jobs.`,
             undefined,
             true,
           );
@@ -2315,7 +2466,7 @@ Terse command-style prompts produce shallow, generic work.
           attachTranscript(record, id);
         }
 
-        if (joinMode == null || joinMode === 'async') {
+        if (joinMode == null || joinMode === "async") {
           // No join mode or explicit async — not part of any batch
         } else {
           // smart or group — add to current batch
@@ -2343,20 +2494,18 @@ Terse command-style prompts produce shallow, generic work.
         const isQueued = record?.status === "queued";
         return textResult(
           `${fallbackNote}Agent ${isQueued ? "queued" : "started"} in background.\n` +
-          `Agent ID: ${id}\n` +
-          `Type: ${displayName}\n` +
-          `Description: ${params.description}\n` +
-          (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
-          (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
-          `\nYou will be notified when this agent completes.\n` +
-          `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
-          `Do not duplicate this agent's work.`,
+            `Agent ID: ${id}\n` +
+            `Type: ${displayName}\n` +
+            `Description: ${params.description}\n` +
+            (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
+            (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+            `\nYou will be notified when this agent completes.\n` +
+            `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
+            `Do not duplicate this agent's work.`,
           { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
           true,
         );
       }
-
-
     },
   });
   /**
@@ -2395,154 +2544,162 @@ Terse command-style prompts produce shallow, generic work.
 
   // ---- get_subagent_result tool ----
 
-  registerToolReportingUsage(defineTool({
-    name: SUBAGENT_TOOL_NAMES.GET_RESULT,
-    label: "Get Agent Result",
-    description:
-      "Check status and retrieve a background agent's full result. For an incomplete top-level run, `wait: true` returns immediately with `terminate: true`; the completion callback arrives after settlement, then retrieve the result.",
-    promptSnippet: "Check status and retrieve results from a background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: "The agent ID to check. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
+  registerToolReportingUsage(
+    defineTool({
+      name: SUBAGENT_TOOL_NAMES.GET_RESULT,
+      label: "Get Agent Result",
+      description:
+        "Check status and retrieve a background agent's full result. For an incomplete top-level run, `wait: true` returns immediately with `terminate: true`; the completion callback arrives after settlement, then retrieve the result.",
+      promptSnippet: "Check status and retrieve results from a background agent",
+      parameters: Type.Object({
+        agent_id: Type.String({
+          description:
+            "The agent ID to check. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
+        }),
+        wait: Type.Optional(
+          Type.Boolean({
+            description:
+              "For an incomplete top-level run, `true` returns immediately with `terminate: true`; retrieve the result after its completion callback. Defaults to `false`, which returns an immediate, non-terminating status.",
+          }),
+        ),
+        verbose: Type.Optional(
+          Type.Boolean({
+            description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
+          }),
+        ),
       }),
-      wait: Type.Optional(
-        Type.Boolean({
-          description: "For an incomplete top-level run, `true` returns immediately with `terminate: true`; retrieve the result after its completion callback. Defaults to `false`, which returns an immediate, non-terminating status.",
-        }),
-      ),
-      verbose: Type.Optional(
-        Type.Boolean({
-          description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
-        }),
-      ),
-    }),
-    ...hiddenToolRenderers,
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = resolveAgentRef(params.agent_id);
-      if (!record || record.parentAgentId) {
-        return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
-      }
-      const revision = record.runRevision;
-
-      // Top-level wait:true is nonblocking: report current status, return
-      // terminate:true so the parent turn can end, and leave the completion
-      // callback armed for later delivery. wait:false is an immediate status check.
-
-      const isSettled = record.runRevision === revision && record.settledRevision === revision;
-      const displayName = getDisplayName(record.type);
-      const duration = formatDuration(record.startedAt, record.completedAt);
-      const tokens = formatLifetimeTokens(record);
-      const contextPercent = getSessionContextPercent(record.session);
-      const statsParts = [`Tool uses: ${record.toolUses}`];
-      if (tokens) statsParts.push(tokens);
-      if (showCost) {
-        const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
-        if (costText) statsParts.push(`Cost: ${costText}`);
-      }
-      if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
-      if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
-      statsParts.push(`Duration: ${duration}`);
-
-      let output =
-        `Agent: ${record.id}\n` +
-        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
-        `Description: ${record.description}\n\n`;
-
-      if (!isSettled) {
-        output += params.wait
-          ? `Agent is ${record.status === "stopped" ? "stopping" : record.status}. This call returns immediately with terminate:true so the parent turn can end. The completion callback arrives after settlement; retrieve the result after it arrives.`
-          : record.status === "stopped"
-            ? "Agent is stopping; its current revision is not settled. This is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives."
-            : `Agent is still running; this is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives.`;
-      } else if (record.status === "error") {
-        output += `Error: ${record.error}${partialOutputSuffix(record)}`;
-      } else {
-        output += record.result?.trim() || "No output.";
-      }
-
-      // Mark only this fully settled run as consumed and remove it from every delivery path.
-      if (
-        isSettled
-        && record.status !== "running"
-        && record.status !== "queued"
-      ) {
-        record.resultConsumed = true;
-        discardCompletionDelivery(record, revision);
-      }
-
-      // Verbose: include full conversation
-      if (params.verbose && record.session) {
-        const conversation = getAgentConversation(record.session);
-        if (conversation) {
-          output += `\n\n--- Agent Conversation ---\n${conversation}`;
+      ...hiddenToolRenderers,
+      execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+        const record = resolveAgentRef(params.agent_id);
+        if (!record || record.parentAgentId) {
+          return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
         }
-      }
+        const revision = record.runRevision;
 
-      return textResult(output, undefined, params.wait === true && !isSettled);
-    },
-  }));
+        // Top-level wait:true is nonblocking: report current status, return
+        // terminate:true so the parent turn can end, and leave the completion
+        // callback armed for later delivery. wait:false is an immediate status check.
+
+        const isSettled = record.runRevision === revision && record.settledRevision === revision;
+        const displayName = getDisplayName(record.type);
+        const duration = formatDuration(record.startedAt, record.completedAt);
+        const tokens = formatLifetimeTokens(record);
+        const contextPercent = getSessionContextPercent(record.session);
+        const statsParts = [`Tool uses: ${record.toolUses}`];
+        if (tokens) statsParts.push(tokens);
+        if (showCost) {
+          const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
+          if (costText) statsParts.push(`Cost: ${costText}`);
+        }
+        if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
+        if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
+        statsParts.push(`Duration: ${duration}`);
+
+        let output =
+          `Agent: ${record.id}\n` +
+          `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
+          `Description: ${record.description}\n\n`;
+
+        if (!isSettled) {
+          output += params.wait
+            ? `Agent is ${record.status === "stopped" ? "stopping" : record.status}. This call returns immediately with terminate:true so the parent turn can end. The completion callback arrives after settlement; retrieve the result after it arrives.`
+            : record.status === "stopped"
+              ? "Agent is stopping; its current revision is not settled. This is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives."
+              : `Agent is still running; this is an immediate, non-terminating status. The completion callback arrives after settlement; retrieve the result after it arrives.`;
+        } else if (record.status === "error") {
+          output += `Error: ${record.error}${partialOutputSuffix(record)}`;
+        } else {
+          output += record.result?.trim() || "No output.";
+        }
+
+        // Mark only this fully settled run as consumed and remove it from every delivery path.
+        if (isSettled && record.status !== "running" && record.status !== "queued") {
+          record.resultConsumed = true;
+          discardCompletionDelivery(record, revision);
+        }
+
+        // Verbose: include full conversation
+        if (params.verbose && record.session) {
+          const conversation = getAgentConversation(record.session);
+          if (conversation) {
+            output += `\n\n--- Agent Conversation ---\n${conversation}`;
+          }
+        }
+
+        return textResult(output, undefined, params.wait === true && !isSettled);
+      },
+    }),
+  );
 
   // ---- steer_subagent tool ----
 
-  registerToolReportingUsage(defineTool({
-    name: SUBAGENT_TOOL_NAMES.STEER,
-    label: "Steer Agent",
-    description:
-      "Send a steering message to a running agent. The message will interrupt the agent after its current tool execution " +
-      "and be injected into its conversation, allowing you to redirect its work mid-run. Only works on running agents.",
-    promptSnippet: "Send a steering message to redirect a running background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: "The agent ID to steer (must be currently running). The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
+  registerToolReportingUsage(
+    defineTool({
+      name: SUBAGENT_TOOL_NAMES.STEER,
+      label: "Steer Agent",
+      description:
+        "Send a steering message to a running agent. The message will interrupt the agent after its current tool execution " +
+        "and be injected into its conversation, allowing you to redirect its work mid-run. Only works on running agents.",
+      promptSnippet: "Send a steering message to redirect a running background agent",
+      parameters: Type.Object({
+        agent_id: Type.String({
+          description:
+            "The agent ID to steer (must be currently running). The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
+        }),
+        message: Type.String({
+          description: "The steering message to send. This will appear as a user message in the agent's conversation.",
+        }),
       }),
-      message: Type.String({
-        description: "The steering message to send. This will appear as a user message in the agent's conversation.",
-      }),
-    }),
-    ...hiddenToolRenderers,
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = resolveAgentRef(params.agent_id);
-      if (!record || record.parentAgentId) {
-        return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
-      }
-      if (record.status !== "running") {
-        return textResult(`Agent "${params.agent_id}" is not running (status: ${record.status}). Cannot steer a non-running agent.`);
-      }
-      if (!record.session) {
-        // Session not ready yet — queue the steer for delivery once initialized
-        if (!record.pendingSteers) record.pendingSteers = [];
-        record.pendingSteers.push(params.message);
-        if (record.parentSessionGeneration === sessionGeneration) {
-          pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+      ...hiddenToolRenderers,
+      execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+        const record = resolveAgentRef(params.agent_id);
+        if (!record || record.parentAgentId) {
+          return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
         }
-        return textResult(`Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`);
-      }
+        if (record.status !== "running") {
+          return textResult(
+            `Agent "${params.agent_id}" is not running (status: ${record.status}). Cannot steer a non-running agent.`,
+          );
+        }
+        if (!record.session) {
+          // Session not ready yet — queue the steer for delivery once initialized
+          if (!record.pendingSteers) record.pendingSteers = [];
+          record.pendingSteers.push(params.message);
+          if (record.parentSessionGeneration === sessionGeneration) {
+            pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+          }
+          return textResult(
+            `Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`,
+          );
+        }
 
-      try {
-        await steerAgent(record.session, params.message);
-        if (record.parentSessionGeneration === sessionGeneration) {
-          pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+        try {
+          await steerAgent(record.session, params.message);
+          if (record.parentSessionGeneration === sessionGeneration) {
+            pi.events.emit("subagents:steered", { id: record.id, message: params.message });
+          }
+          const tokens = formatLifetimeTokens(record);
+          const contextPercent = getSessionContextPercent(record.session);
+          const stateParts: string[] = [];
+          if (tokens) stateParts.push(tokens);
+          if (showCost) {
+            const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
+            if (costText) stateParts.push(costText);
+          }
+          stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
+          if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
+          if (record.compactionCount)
+            stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
+          return textResult(
+            `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
+              `Current state: ${stateParts.join(" · ")}`,
+          );
+        } catch (err) {
+          return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const tokens = formatLifetimeTokens(record);
-        const contextPercent = getSessionContextPercent(record.session);
-        const stateParts: string[] = [];
-        if (tokens) stateParts.push(tokens);
-        if (showCost) {
-          const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
-          if (costText) stateParts.push(costText);
-        }
-        stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
-        if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
-        if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
-        return textResult(
-          `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
-          `Current state: ${stateParts.join(" · ")}`,
-        );
-      } catch (err) {
-        return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-  }));
+      },
+    }),
+  );
 
   // ---- /agents interactive menu ----
 
@@ -2563,7 +2720,11 @@ Terse command-style prompts produce shallow, generic work.
     // e.g. a provider fallback or a looser version pin. Cosmetic separator/date
     // differences are normalized away so an effectively-identical match stays quiet.
     const resolvedFull = `${resolved.provider}/${resolved.id}`;
-    const norm = (s: string) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/\./g, "-")
+        .replace(/-\d{8}$/, "");
     if (norm(cfg.model) === norm(resolvedFull)) return label;
     return `${label} (→ ${resolvedFull.replace(/-\d{8}$/, "")})`;
   }
@@ -2576,10 +2737,10 @@ Terse command-style prompts produce shallow, generic work.
     const options: string[] = [];
 
     // Running agents entry (only if there are active agents)
-    const agents = manager.listAgents().filter(a => !a.parentAgentId);
+    const agents = manager.listAgents().filter((a) => !a.parentAgentId);
     if (agents.length > 0) {
-      const running = agents.filter(a => a.status === "running" || a.status === "queued").length;
-      const done = agents.filter(a => a.status === "completed" || a.status === "steered").length;
+      const running = agents.filter((a) => a.status === "running" || a.status === "queued").length;
+      const done = agents.filter((a) => a.status === "completed" || a.status === "steered").length;
       options.push(`Running agents (${agents.length}) — ${running} running, ${done} done`);
     }
 
@@ -2598,11 +2759,12 @@ Terse command-style prompts produce shallow, generic work.
     options.push("Create new agent");
     options.push("Settings");
 
-    const noAgentsMsg = allNames.length === 0 && agents.length === 0
-      ? "No agents found. Create specialized subagents that can be delegated to.\n\n" +
-        "Each subagent has its own context window, custom system prompt, and specific tools.\n\n" +
-        "Try creating: Code Reviewer, Security Auditor, Test Writer, or Documentation Writer.\n\n"
-      : "";
+    const noAgentsMsg =
+      allNames.length === 0 && agents.length === 0
+        ? "No agents found. Create specialized subagents that can be delegated to.\n\n" +
+          "Each subagent has its own context window, custom system prompt, and specific tools.\n\n" +
+          "Try creating: Code Reviewer, Security Auditor, Test Writer, or Documentation Writer.\n\n"
+        : "";
 
     if (noAgentsMsg) {
       ctx.ui.notify(noAgentsMsg, "info");
@@ -2648,7 +2810,7 @@ Terse command-style prompts produce shallow, generic work.
     // One row per agent (name in the left column, model on the right); the
     // full description renders below the highlighted row via SettingsList,
     // exactly like the Settings menu — so long descriptions never wrap the list.
-    const items: SettingItem[] = allNames.map(name => {
+    const items: SettingItem[] = allNames.map((name) => {
       const cfg = getAgentConfig(name);
       const disabled = cfg?.enabled === false;
       const model = getModelLabel(name, ctx.modelRegistry);
@@ -2663,8 +2825,11 @@ Terse command-style prompts produce shallow, generic work.
       };
     });
 
-    const hasCustom = allNames.some(n => { const c = getAgentConfig(n); return c && !c.isDefault && c.enabled !== false; });
-    const hasDisabled = allNames.some(n => getAgentConfig(n)?.enabled === false);
+    const hasCustom = allNames.some((n) => {
+      const c = getAgentConfig(n);
+      return c && !c.isDefault && c.enabled !== false;
+    });
+    const hasDisabled = allNames.some((n) => getAgentConfig(n)?.enabled === false);
     const legendParts: string[] = [];
     if (hasCustom) legendParts.push("• = project  ◦ = global");
     if (hasDisabled) legendParts.push("✕ = disabled");
@@ -2675,7 +2840,7 @@ Terse command-style prompts produce shallow, generic work.
         items,
         Math.min(items.length, 12),
         slTheme,
-        id => done(id), // Enter/Space on a row → return that agent's name
+        (id) => done(id), // Enter/Space on a row → return that agent's name
         () => done(undefined), // Esc → cancel
       );
       const container = new Container();
@@ -2697,7 +2862,7 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   async function showRunningAgents(ctx: ExtensionCommandContext) {
-    const agents = manager.listAgents().filter(a => !a.parentAgentId);
+    const agents = manager.listAgents().filter((a) => !a.parentAgentId);
     if (agents.length === 0) {
       ctx.ui.notify("No agents.", "info");
       return;
@@ -2706,7 +2871,7 @@ Terse command-style prompts produce shallow, generic work.
     // Numbered + item-paired. Two same-type agents spawned together with the
     // same description render identically here, and resolving the choice by
     // string match would open whichever came first.
-    const record = await selectItem(ctx.ui, "Running agents", agents, a => {
+    const record = await selectItem(ctx.ui, "Running agents", agents, (a) => {
       const dn = getDisplayName(a.type);
       const dur = formatDuration(a.startedAt, a.completedAt);
       return `${dn} (${a.description}) · ${a.toolUses} tools · ${a.status} · ${dur}`;
@@ -2730,11 +2895,22 @@ Terse command-style prompts produce shallow, generic work.
 
     await ctx.ui.custom<undefined>(
       (tui, theme, keybindings, done) => {
-        return new ConversationViewer(tui, session, record, activity, theme, done, () => {
-          if (manager.abort(record.id)) {
-            ctx.ui.notify(`Stopped "${record.description}".`, "info");
-          }
-        }, keybindings, (message: string) => manager.steer(record.id, message), showCost);
+        return new ConversationViewer(
+          tui,
+          session,
+          record,
+          activity,
+          theme,
+          done,
+          () => {
+            if (manager.abort(record.id)) {
+              ctx.ui.notify(`Stopped "${record.description}".`, "info");
+            }
+          },
+          keybindings,
+          (message: string) => manager.steer(record.id, message),
+          showCost,
+        );
       },
       {
         overlay: true,
@@ -2793,7 +2969,10 @@ Terse command-style prompts produce shallow, generic work.
         }
       }
     } else if (choice === "Reset to default" && file) {
-      const confirmed = await ctx.ui.confirm("Reset to default", `Delete override ${file.path} and restore embedded default?`);
+      const confirmed = await ctx.ui.confirm(
+        "Reset to default",
+        `Delete override ${file.path} and restore embedded default?`,
+      );
       if (confirmed) {
         unlinkSync(file.path);
         reloadCustomAgents();
@@ -3017,7 +3196,12 @@ Write the file using the write tool. Only write the file, nothing else.`;
     if (!description) return;
 
     // 3. Tools
-    const toolChoice = await ctx.ui.select("Tools", ["all", "none", "read-only (read, bash, grep, find, ls)", "custom..."]);
+    const toolChoice = await ctx.ui.select("Tools", [
+      "all",
+      "none",
+      "read-only (read, bash, grep, find, ls)",
+      "custom...",
+    ]);
     if (!toolChoice) return;
 
     let tools: string;
@@ -3187,7 +3371,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "schedulingEnabled",
           label: "Scheduling",
-          description: "Schedule subagent feature (off removes `schedule` param from Agent tool spec on next pi session)",
+          description:
+            "Schedule subagent feature (off removes `schedule` param from Agent tool spec on next pi session)",
           currentValue: isSchedulingEnabled() ? "on" : "off",
           values: ["on", "off"],
         },
@@ -3222,7 +3407,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "outputTranscript",
           label: "Output transcript",
-          description: "Write each subagent's .output transcript by default. A custom agent's output_transcript frontmatter overrides this.",
+          description:
+            "Write each subagent's .output transcript by default. A custom agent's output_transcript frontmatter overrides this.",
           currentValue: getOutputTranscriptDefault() ? "on" : "off",
           values: ["on", "off"],
         },
@@ -3260,21 +3446,24 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "agentMentions",
           label: "Agent mentions",
-          description: "Route `@handle message` at the prompt to that agent. model = an off-screen clone of this conversation calls the Agent tool, so the agent gets a context-written prompt, a transcript and per-tool detail, and the chat stays clean; direct = started here from your text, no model call. Messaging and resuming are direct either way.",
+          description:
+            "Route `@handle message` at the prompt to that agent. model = an off-screen clone of this conversation calls the Agent tool, so the agent gets a context-written prompt, a transcript and per-tool detail, and the chat stays clean; direct = started here from your text, no model call. Messaging and resuming are direct either way.",
           currentValue: getAgentMentionMode(),
           values: ["model", "direct", "off"],
         },
         {
           id: "rememberAgents",
           label: "Remember agents",
-          description: "Persist subagent sessions so `@handle` can resume one long after it finished (they also appear in /resume)",
+          description:
+            "Persist subagent sessions so `@handle` can resume one long after it finished (they also appear in /resume)",
           currentValue: getRememberAgents() ? "on" : "off",
           values: ["on", "off"],
         },
         {
           id: "toolDescriptionMode",
           label: "Tool description",
-          description: "Agent tool description sent to the LLM: full (rich, default), compact (~75% fewer tokens, for small/local models), or custom (.pi/agent-tool-description.md with {{placeholders}})",
+          description:
+            "Agent tool description sent to the LLM: full (rich, default), compact (~75% fewer tokens, for small/local models), or custom (.pi/agent-tool-description.md with {{placeholders}})",
           currentValue: getToolDescriptionMode(),
           values: ["full", "compact", "custom"],
         },
@@ -3309,9 +3498,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
           setMaxSubagentDepth(n);
           notifyApplied(
             ctx,
-            n <= 1
-              ? "Nested delegation disabled"
-              : `Nested depth set to ${n}. Applies to agents started from now on.`,
+            n <= 1 ? "Nested delegation disabled" : `Nested depth set to ${n}. Applies to agents started from now on.`,
           );
         }
       } else if (id === "joinMode") {
@@ -3323,7 +3510,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
           ctx.ui.notify(`Scheduling already ${enabled ? "enabled" : "disabled"}.`, "info");
         } else {
           setSchedulingEnabled(enabled);
-          if (!enabled) scheduler.stop();  // immediate kill — outstanding fires stop ticking
+          if (!enabled) scheduler.stop(); // immediate kill — outstanding fires stop ticking
           notifyApplied(
             ctx,
             `Scheduling ${enabled ? "enabled" : "disabled"}. Tool spec change takes effect on next pi session.`,
@@ -3340,7 +3527,10 @@ Write the file using the write tool. Only write the file, nothing else.`;
       } else if (id === "disableDefaultAgents") {
         const enabled = value === "on";
         setDisableDefaultAgents(enabled);
-        notifyApplied(ctx, `Default agents ${enabled ? "disabled" : "enabled"}. Tool spec change takes effect on next pi session.`);
+        notifyApplied(
+          ctx,
+          `Default agents ${enabled ? "disabled" : "enabled"}. Tool spec change takes effect on next pi session.`,
+        );
       } else if (id === "fallbackSubagent") {
         setFallbackSubagent(value);
         notifyApplied(
@@ -3446,21 +3636,23 @@ Write the file using the write tool. Only write the file, nothing else.`;
 
     // If a numeric field ID was returned, prompt for typed input
     if (result && NUMERIC_IDS.has(result)) {
-      const current = result === "maxConcurrent"
-        ? String(manager.getMaxConcurrent())
-        : result === "defaultMaxTurns"
-          ? String(getDefaultMaxTurns() ?? 0)
-          : result === "maxSubagentDepth"
-            ? String(getMaxSubagentDepth())
-            : String(getGraceTurns());
+      const current =
+        result === "maxConcurrent"
+          ? String(manager.getMaxConcurrent())
+          : result === "defaultMaxTurns"
+            ? String(getDefaultMaxTurns() ?? 0)
+            : result === "maxSubagentDepth"
+              ? String(getMaxSubagentDepth())
+              : String(getGraceTurns());
 
-      const label = result === "maxConcurrent"
-        ? "Max concurrency (1+)"
-        : result === "defaultMaxTurns"
-          ? "Default max turns (0 = unlimited)"
-          : result === "maxSubagentDepth"
-            ? "Nested depth (0/1 = nesting off)"
-            : "Grace turns (1+)";
+      const label =
+        result === "maxConcurrent"
+          ? "Max concurrency (1+)"
+          : result === "defaultMaxTurns"
+            ? "Default max turns (0 = unlimited)"
+            : result === "maxSubagentDepth"
+              ? "Nested depth (0/1 = nesting off)"
+              : "Grace turns (1+)";
 
       // Loop until user enters a valid integer or cancels (Esc / null).
       // Silently trims whitespace; rejects non-numeric input by re-prompting.
@@ -3484,16 +3676,16 @@ Write the file using the write tool. Only write the file, nothing else.`;
   // to warning so users aren't silently reverted on restart. Event fires regardless
   // of outcome so listeners see the in-memory change.
   function notifyApplied(ctx: ExtensionCommandContext, successMsg: string) {
-    const { message, level } = saveAndEmitChanged(
-      snapshotSettings(),
-      successMsg,
-      (event, payload) => pi.events.emit(event, payload),
+    const { message, level } = saveAndEmitChanged(snapshotSettings(), successMsg, (event, payload) =>
+      pi.events.emit(event, payload),
     );
     ctx.ui.notify(message, level);
   }
 
   pi.registerCommand("agents", {
     description: "Manage agents",
-    handler: async (_args, ctx) => { await showAgentsMenu(ctx); },
+    handler: async (_args, ctx) => {
+      await showAgentsMenu(ctx);
+    },
   });
 }

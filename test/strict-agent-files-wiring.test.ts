@@ -102,9 +102,7 @@ describe("strictAgentFiles gates extension activation", () => {
     expect(() => subagentsExtension(pi)).not.toThrow();
     writeFileSync(path, BROKEN);
 
-    const agentTool = (pi.registerTool as any).mock.calls
-      .map((c: any[]) => c[0])
-      .find((t: any) => t.name === "Agent");
+    const agentTool = (pi.registerTool as any).mock.calls.map((c: any[]) => c[0]).find((t: any) => t.name === "Agent");
     expect(agentTool).toBeDefined();
 
     // The Agent tool reloads the registry per call. That reload must be

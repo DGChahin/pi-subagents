@@ -38,12 +38,11 @@ function retrievedSubagentResults(session: PrintModeRun["parentSession"]): strin
   return session.messages
     .filter(
       (message) =>
-        message.role === "toolResult" &&
-        (message as { toolName?: string }).toolName === "get_subagent_result",
+        message.role === "toolResult" && (message as { toolName?: string }).toolName === "get_subagent_result",
     )
     .map((message) =>
       ((message.content ?? []) as Array<{ type?: string; text?: string }>)
-        .map((block) => block.type === "text" ? (block.text ?? "") : "")
+        .map((block) => (block.type === "text" ? (block.text ?? "") : ""))
         .join(""),
     );
 }
@@ -139,8 +138,7 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
         }),
         parentFinal: "Reported.",
         // The child reflects whether the frontmatter body reached its own prompt.
-        subagent: (ctx: Context) =>
-          `child saw: ${ctx.systemPrompt?.includes(MARKER) ? MARKER : "MISSING"}`,
+        subagent: (ctx: Context) => `child saw: ${ctx.systemPrompt?.includes(MARKER) ? MARKER : "MISSING"}`,
       }),
     });
 
@@ -169,8 +167,7 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
           prompt: "Report what you were told.",
         }),
         parentFinal: "Reported.",
-        subagent: (ctx: Context) =>
-          `child saw: ${ctx.systemPrompt?.includes(MARKER) ? MARKER : "MISSING"}`,
+        subagent: (ctx: Context) => `child saw: ${ctx.systemPrompt?.includes(MARKER) ? MARKER : "MISSING"}`,
       }),
     });
 
@@ -267,7 +264,7 @@ describe.runIf(LIVE)("subagents print-mode e2e (live LLM, opt-in)", () => {
       });
       expect(run.modelCalls).toBe(0); // live mode doesn't use the faux counter
       expect(invokedToolNames(run.parentSession)).toContain("Agent");
-      expect(agentToolCalls(run.parentSession).some(call => call.run_in_background === false)).toBe(false);
+      expect(agentToolCalls(run.parentSession).some((call) => call.run_in_background === false)).toBe(false);
       expect(invokedToolNames(run.parentSession)).toContain("get_subagent_result");
       expect(run.responseText).toMatch(/PONG/i);
     },
@@ -307,9 +304,7 @@ describe.runIf(LIVE)("subagents print-mode e2e (live LLM, opt-in)", () => {
       });
       const calls = agentToolCalls(run.parentSession);
       // The non-default type was actually selected (case-insensitive per README).
-      expect(
-        calls.some((c) => String(c.subagent_type ?? "").toLowerCase() === "explore"),
-      ).toBe(true);
+      expect(calls.some((c) => String(c.subagent_type ?? "").toLowerCase() === "explore")).toBe(true);
       expect(run.responseText.length).toBeGreaterThan(0);
     },
     LIVE_VITEST_TIMEOUT,

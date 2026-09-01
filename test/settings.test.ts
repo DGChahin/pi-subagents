@@ -144,7 +144,6 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
-
   it("round-trips outputTranscript; drops non-boolean", () => {
     saveSettings({ outputTranscript: false }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ outputTranscript: false });
@@ -579,7 +578,6 @@ describe("settings persistence", () => {
       expect(appliers.setStrictAgentFiles).toHaveBeenCalledTimes(1);
     });
 
-
     it("applies fleetView (true and false); skips it when absent", () => {
       applySettings({ fleetView: true }, appliers);
       expect(appliers.setFleetView).toHaveBeenCalledWith(true);
@@ -772,12 +770,7 @@ describe("settings persistence", () => {
       writeFileSync(filePosingAsCwd, "");
       const emit = vi.fn();
       try {
-        const toast = saveAndEmitChanged(
-          { maxConcurrent: 5 },
-          "Max concurrency set to 5",
-          emit,
-          filePosingAsCwd,
-        );
+        const toast = saveAndEmitChanged({ maxConcurrent: 5 }, "Max concurrency set to 5", emit, filePosingAsCwd);
         expect(emit).toHaveBeenCalledWith("subagents:settings_changed", {
           settings: { maxConcurrent: 5, backgroundByDefault: true },
           persisted: false,

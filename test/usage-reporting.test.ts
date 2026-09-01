@@ -40,13 +40,15 @@ function runSpendingNothing() {
 }
 
 const spawn = (tools: Map<string, any>, toolCallId: string | undefined) =>
-  tools.get("Agent").execute(
-    toolCallId,
-    { prompt: "go", description: "spend", subagent_type: "general-purpose" },
-    undefined,
-    undefined,
-    ctx(),
-  );
+  tools
+    .get("Agent")
+    .execute(
+      toolCallId,
+      { prompt: "go", description: "spend", subagent_type: "general-purpose" },
+      undefined,
+      undefined,
+      ctx(),
+    );
 
 /** Retrieve stored output only after this exact top-level revision settles. */
 const retrieve = async (tools: Map<string, any>, started: any, toolCallId = "tc-result") => {
@@ -59,13 +61,9 @@ const retrieve = async (tools: Map<string, any>, started: any, toolCallId = "tc-
   if (!record?.promise) throw new Error(`agent ${agentId} has no tracked run`);
   await record.promise;
   expect(record.settledRevision).toBe(record.runRevision);
-  return tools.get("get_subagent_result").execute(
-    toolCallId,
-    { agent_id: agentId, wait: true },
-    undefined,
-    undefined,
-    ctx(),
-  );
+  return tools
+    .get("get_subagent_result")
+    .execute(toolCallId, { agent_id: agentId, wait: true }, undefined, undefined, ctx());
 };
 
 describe("reporting subagent usage back to the parent session", () => {
@@ -253,7 +251,12 @@ describe("reporting subagent usage back to the parent session", () => {
         });
         await manager.getRecord(childId).promise;
       }
-      return { responseText: "done", session: { dispose: vi.fn(), messages: [] } as any, aborted: false, steered: false };
+      return {
+        responseText: "done",
+        session: { dispose: vi.fn(), messages: [] } as any,
+        aborted: false,
+        steered: false,
+      };
     });
 
     const started = await spawn(tools, "tc-1");

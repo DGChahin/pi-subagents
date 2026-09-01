@@ -73,12 +73,13 @@ export function mentionRoster(
   types: readonly TypeInfo[],
   // Identity by default: a caller with no registry to consult gets the raw
   // type, which is also what `getConfig` falls back to when no label is set.
-  displayNameOf: (type: string) => string = type => type,
+  displayNameOf: (type: string) => string = (type) => type,
 ): MentionTarget[] {
   const live = (r: AgentRecord) => r.status === "running" || r.status === "queued";
-  const records = manager.listAgents()
-    .filter(r => r.handle !== undefined && r.parentAgentId === undefined)
-    .sort((a, b) => (Number(live(b)) - Number(live(a))) || (a.startedAt - b.startedAt));
+  const records = manager
+    .listAgents()
+    .filter((r) => r.handle !== undefined && r.parentAgentId === undefined)
+    .sort((a, b) => Number(live(b)) - Number(live(a)) || a.startedAt - b.startedAt);
 
   const taken = new Set<string>();
   const targets: MentionTarget[] = [];

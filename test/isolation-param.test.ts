@@ -19,7 +19,7 @@ describe("isolationParam", () => {
   }
 
   it("offers a value meaning 'no isolation', not just 'worktree'", () => {
-    const values = schema(true)?.anyOf?.map(v => v.const);
+    const values = schema(true)?.anyOf?.map((v) => v.const);
     expect(values).toContain("off");
     expect(values).toContain("worktree");
   });

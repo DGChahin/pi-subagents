@@ -287,10 +287,12 @@ describe("findAgentFile", () => {
       write(join(tmpDir, ".agents", "agents"), "reviewer");
       write(join(agentDir, "agents"), "auditor");
 
-      expect(locateAgentFile("code-reviewer", join(tmpDir, ".agents", "agents", "reviewer.md"), tmpDir))
-        .toMatchObject({ location: "workspace" });
-      expect(locateAgentFile("code-auditor", join(agentDir, "agents", "auditor.md"), tmpDir))
-        .toMatchObject({ location: "personal" });
+      expect(locateAgentFile("code-reviewer", join(tmpDir, ".agents", "agents", "reviewer.md"), tmpDir)).toMatchObject({
+        location: "workspace",
+      });
+      expect(locateAgentFile("code-auditor", join(agentDir, "agents", "auditor.md"), tmpDir)).toMatchObject({
+        location: "personal",
+      });
     });
 
     it("falls back to the <type>.md probe for a built-in with no source file", () => {

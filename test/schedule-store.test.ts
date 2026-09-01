@@ -90,7 +90,7 @@ describe("ScheduleStore", () => {
     const job = makeJob({ name: "alpha" });
     store.add(job);
     expect(store.hasName("alpha")).toBe(true);
-    expect(store.hasName("alpha", job.id)).toBe(false);  // excluded — own record
+    expect(store.hasName("alpha", job.id)).toBe(false); // excluded — own record
     expect(store.hasName("beta")).toBe(false);
   });
 
@@ -135,8 +135,13 @@ describe("ScheduleStore", () => {
     const a = makeJob({ id: "a" });
     const b = makeJob({ id: "b" });
     store.add(a);
-    store.add(b);  // would hang if the lock from the first add wasn't released
-    expect(store.list().map(j => j.id).sort()).toEqual(["a", "b"]);
+    store.add(b); // would hang if the lock from the first add wasn't released
+    expect(
+      store
+        .list()
+        .map((j) => j.id)
+        .sort(),
+    ).toEqual(["a", "b"]);
   });
 
   it("does not create the backing directory until a mutation persists", () => {
@@ -169,7 +174,7 @@ describe("ScheduleStore", () => {
     const store = new ScheduleStore(file);
     const job = makeJob();
     store.add(job);
-    store.deleteFileIfEmpty();  // not empty — should be a no-op
+    store.deleteFileIfEmpty(); // not empty — should be a no-op
     expect(existsSync(file)).toBe(true);
 
     store.remove(job.id);

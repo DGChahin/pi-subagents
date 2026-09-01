@@ -87,7 +87,8 @@ function nearest(values: readonly number[], value: number): number {
  */
 function rgbTo256({ r, g, b }: Rgb): { index: number; rgb: Rgb } {
   const [rIndex, gIndex, bIndex] = [r, g, b].map((channel) => nearest(CUBE_VALUES, channel));
-  const distance = ({ r: cr, g: cg, b: cb }: Rgb) => 0.299 * (r - cr) ** 2 + 0.587 * (g - cg) ** 2 + 0.114 * (b - cb) ** 2;
+  const distance = ({ r: cr, g: cg, b: cb }: Rgb) =>
+    0.299 * (r - cr) ** 2 + 0.587 * (g - cg) ** 2 + 0.114 * (b - cb) ** 2;
   const grayIndex = nearest(GRAY_VALUES, Math.round(0.299 * r + 0.587 * g + 0.114 * b));
   const gray = { r: GRAY_VALUES[grayIndex], g: GRAY_VALUES[grayIndex], b: GRAY_VALUES[grayIndex] };
   const cube = { r: CUBE_VALUES[rIndex], g: CUBE_VALUES[gIndex], b: CUBE_VALUES[bIndex] };
@@ -137,11 +138,13 @@ export function renderAgentNameLabel(
   const contrasting = relativeLuminance(shown) > 0.179 ? BLACK : WHITE;
   const label = style.bold ? theme.bold(` ${name} `) : ` ${name} `;
 
-  return ansiColor("background", quantized?.index ?? rgb)
-    + ansiColor("foreground", quantized ? rgbTo256(contrasting).index : contrasting)
-    + label
-    + "\u001b[39m"
-    + (style.restoreBackground ?? "\u001b[49m");
+  return (
+    ansiColor("background", quantized?.index ?? rgb) +
+    ansiColor("foreground", quantized ? rgbTo256(contrasting).index : contrasting) +
+    label +
+    "\u001b[39m" +
+    (style.restoreBackground ?? "\u001b[49m")
+  );
 }
 
 /** Whether an agent renders as a badge — i.e. it has a valid configured color. */
@@ -150,11 +153,7 @@ export function hasAgentBadge(type: string | undefined): boolean {
 }
 
 /** Render a registered agent's display name with its configured color. */
-export function renderAgentName(
-  type: string | undefined,
-  theme: AgentNameTheme,
-  style: AgentNameStyle = {},
-): string {
+export function renderAgentName(type: string | undefined, theme: AgentNameTheme, style: AgentNameStyle = {}): string {
   if (!type) return renderAgentNameLabel("Agent", undefined, theme, style);
   const config = getConfig(type);
   return renderAgentNameLabel(config.displayName, config.color, theme, style);

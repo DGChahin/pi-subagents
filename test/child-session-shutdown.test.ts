@@ -82,19 +82,27 @@ describe("child session shutdown (#242)", () => {
     });
     // Order is the whole point: after `dispose()` the runner is invalidated and
     // every `ctx` getter throws, so a handler emitted afterwards is useless.
-    expect(session.extensionRunner.emit.mock.invocationCallOrder[0])
-      .toBeLessThan(session.dispose.mock.invocationCallOrder[0]);
+    expect(session.extensionRunner.emit.mock.invocationCallOrder[0]).toBeLessThan(
+      session.dispose.mock.invocationCallOrder[0],
+    );
   });
 
   it("quit waits for the child's shutdown handlers to finish", async () => {
     manager = new AgentManager();
     let releaseHandler!: () => void;
-    const session = boundSession(() => new Promise<void>(r => { releaseHandler = r; }));
+    const session = boundSession(
+      () =>
+        new Promise<void>((r) => {
+          releaseHandler = r;
+        }),
+    );
     await spawnCompleted(manager, session);
 
     const disposed = manager.dispose();
     let settled = false;
-    void disposed.then(() => { settled = true; });
+    void disposed.then(() => {
+      settled = true;
+    });
     // Several microtask turns: enough for a fire-and-forget implementation to have
     // resolved, not enough for a correctly awaited one.
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -155,7 +163,7 @@ describe("child session shutdown (#242)", () => {
       manager.clearCompleted();
       await expect(manager.dispose()).resolves.toBeUndefined();
 
-      await new Promise(r => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
       expect(rejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onRejection);

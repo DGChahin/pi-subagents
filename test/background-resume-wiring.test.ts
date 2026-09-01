@@ -42,7 +42,9 @@ function makePi() {
     registerCommand: vi.fn(),
     on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
     events: {
-      emit: vi.fn((event: string, payload: any) => { emitted.push({ event, payload }); }),
+      emit: vi.fn((event: string, payload: any) => {
+        emitted.push({ event, payload });
+      }),
       on: vi.fn(() => vi.fn()),
     },
     appendEntry: vi.fn(),
@@ -150,22 +152,20 @@ describe("Agent tool — background resume wiring", () => {
 
   /** Spawn, settle, and consume one exact revision so the session can be resumed. */
   async function spawnSettled(tools: Map<string, any>, ctx: any, type = "general-purpose") {
-    const res = await tools.get("Agent").execute(
-      "spawn-call",
-      { prompt: "first task", description: "First task", subagent_type: type, run_in_background: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const res = await tools
+      .get("Agent")
+      .execute(
+        "spawn-call",
+        { prompt: "first task", description: "First task", subagent_type: type, run_in_background: true },
+        undefined,
+        undefined,
+        ctx,
+      );
     const id = agentIdOf(res);
     await waitForSettled(id);
-    await tools.get("get_subagent_result").execute(
-      "consume-spawn",
-      { agent_id: id, wait: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tools
+      .get("get_subagent_result")
+      .execute("consume-spawn", { agent_id: id, wait: true }, undefined, undefined, ctx);
     return id;
   }
 
@@ -193,7 +193,13 @@ describe("Agent tool — background resume wiring", () => {
     const toolAbort = new AbortController();
     await tools.get("Agent").execute(
       "resume-call",
-      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: true },
+      {
+        prompt: "keep going",
+        description: "Keep going",
+        subagent_type: "general-purpose",
+        resume: id,
+        run_in_background: true,
+      },
       toolAbort.signal,
       undefined,
       ctx,
@@ -223,7 +229,13 @@ describe("Agent tool — background resume wiring", () => {
 
     await tools.get("Agent").execute(
       "resume-call",
-      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: true },
+      {
+        prompt: "keep going",
+        description: "Keep going",
+        subagent_type: "general-purpose",
+        resume: id,
+        run_in_background: true,
+      },
       undefined,
       undefined,
       ctx,
@@ -254,13 +266,19 @@ describe("Agent tool — background resume wiring", () => {
     emitted.length = 0;
     const res = await tools.get("Agent").execute(
       "resume-call",
-      { prompt: "keep going", description: "Different description", subagent_type: "explorer", resume: id, run_in_background: true },
+      {
+        prompt: "keep going",
+        description: "Different description",
+        subagent_type: "explorer",
+        resume: id,
+        run_in_background: true,
+      },
       undefined,
       undefined,
       ctx,
     );
 
-    const created = emitted.find(e => e.event === "subagents:created");
+    const created = emitted.find((e) => e.event === "subagents:created");
     expect(created).toBeDefined();
     expect(created!.payload.type).toBe("general-purpose");
     expect(created!.payload.id).toBe(id);
@@ -279,16 +297,23 @@ describe("Agent tool — background resume wiring", () => {
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
 
-    vi.mocked(resumeAgent).mockImplementation((_session: any, _prompt: any, options: any) =>
-      new Promise((resolve) => {
-        const finish = () => resolve({ text: "", aborted: true });
-        if (options.signal?.aborted) finish();
-        else options.signal?.addEventListener("abort", finish, { once: true });
-      }),
+    vi.mocked(resumeAgent).mockImplementation(
+      (_session: any, _prompt: any, options: any) =>
+        new Promise((resolve) => {
+          const finish = () => resolve({ text: "", aborted: true });
+          if (options.signal?.aborted) finish();
+          else options.signal?.addEventListener("abort", finish, { once: true });
+        }),
     );
     vi.mocked(resumeAgent).mockClear();
 
-    const params = { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: true };
+    const params = {
+      prompt: "keep going",
+      description: "Keep going",
+      subagent_type: "general-purpose",
+      resume: id,
+      run_in_background: true,
+    };
     await tools.get("Agent").execute("resume-1", params, undefined, undefined, ctx);
     const second = await tools.get("Agent").execute("resume-2", params, undefined, undefined, ctx);
 
@@ -309,7 +334,13 @@ describe("Agent tool — background resume wiring", () => {
     vi.mocked(resumeAgent).mockClear();
     const res = await tools.get("Agent").execute(
       "resume-call",
-      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: false },
+      {
+        prompt: "keep going",
+        description: "Keep going",
+        subagent_type: "general-purpose",
+        resume: id,
+        run_in_background: false,
+      },
       undefined,
       undefined,
       ctx,

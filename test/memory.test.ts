@@ -13,7 +13,16 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: mockHomedir };
 });
 
-import { buildMemoryBlock, buildReadOnlyMemoryBlock, ensureMemoryDir, isSymlink, isUnsafeName, readMemoryIndex, resolveMemoryDir, safeReadFile } from "../src/memory.js";
+import {
+  buildMemoryBlock,
+  buildReadOnlyMemoryBlock,
+  ensureMemoryDir,
+  isSymlink,
+  isUnsafeName,
+  readMemoryIndex,
+  resolveMemoryDir,
+  safeReadFile,
+} from "../src/memory.js";
 
 describe("memory", () => {
   let tmpDir: string;

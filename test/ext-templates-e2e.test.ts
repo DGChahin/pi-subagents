@@ -43,16 +43,19 @@ const FIXTURES_DIR = resolve(fileURLToPath(new URL("./fixtures", import.meta.url
 const TEMPLATES_DIR = join(FIXTURES_DIR, ".pi", "agents");
 
 function csv(val: unknown): string[] {
-  return typeof val === "string" ? val.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  return typeof val === "string"
+    ? val
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 }
 
 /** Discover scenarios from the template files at collection time. */
 const SCENARIOS = readdirSync(TEMPLATES_DIR)
   .filter((f) => f.endsWith(".md"))
   .map((file) => {
-    const fm = parseFrontmatter<Record<string, unknown>>(
-      readFileSync(join(TEMPLATES_DIR, file), "utf8"),
-    ).frontmatter;
+    const fm = parseFrontmatter<Record<string, unknown>>(readFileSync(join(TEMPLATES_DIR, file), "utf8")).frontmatter;
     return {
       name: file.replace(/\.md$/, ""), // loadCustomAgents keys agents by filename
       present: csv(fm.expect_tools_present),
@@ -160,14 +163,17 @@ describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)
     }
   });
 
-  it.each(SCENARIOS)(
-    "$name → active tools and system prompt match the template",
-    async ({ name, present, absent, promptContains, promptAbsent }) => {
-      const { active, prompt } = await runScenario(name);
-      for (const tool of present) expect(active, `${name}: expected "${tool}" active`).toContain(tool);
-      for (const tool of absent) expect(active, `${name}: expected "${tool}" NOT active`).not.toContain(tool);
-      for (const s of promptContains) expect(prompt, `${name}: prompt should contain "${s}"`).toContain(s);
-      for (const s of promptAbsent) expect(prompt, `${name}: prompt should NOT contain "${s}"`).not.toContain(s);
-    },
-  );
+  it.each(SCENARIOS)("$name → active tools and system prompt match the template", async ({
+    name,
+    present,
+    absent,
+    promptContains,
+    promptAbsent,
+  }) => {
+    const { active, prompt } = await runScenario(name);
+    for (const tool of present) expect(active, `${name}: expected "${tool}" active`).toContain(tool);
+    for (const tool of absent) expect(active, `${name}: expected "${tool}" NOT active`).not.toContain(tool);
+    for (const s of promptContains) expect(prompt, `${name}: prompt should contain "${s}"`).toContain(s);
+    for (const s of promptAbsent) expect(prompt, `${name}: prompt should NOT contain "${s}"`).not.toContain(s);
+  });
 });

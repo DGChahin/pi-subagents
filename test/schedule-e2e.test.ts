@@ -33,7 +33,9 @@ function makeFaithfulManager(initialStatus = "completed") {
     spawn: vi.fn(function (this: any) {
       const id = "agent-" + Math.random().toString(36).slice(2, 10);
       let resolve!: () => void;
-      const promise = new Promise<string>(r => { resolve = () => r(""); });
+      const promise = new Promise<string>((r) => {
+        resolve = () => r("");
+      });
       records.set(id, { status: initialStatus, promise, resolve });
       // Auto-resolve on next tick — mimics a fast-finishing real agent.
       queueMicrotask(() => records.get(id)?.resolve());
@@ -64,7 +66,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void
     if (Date.now() - start > timeoutMs) {
       throw new Error(`waitFor timed out after ${timeoutMs}ms`);
     }
-    await new Promise(r => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 5));
   }
 }
 
@@ -104,17 +106,17 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     // Wait for the spawn to occur (real timer fires) and the finalize promise
     // chain to settle. Polling, no fake timers.
     await waitFor(() => manager.spawn.mock.calls.length === 1);
-    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus === "success");
+    await waitFor(() => scheduler.list().find((j) => j.id === job.id)?.lastStatus === "success");
 
-    const final = scheduler.list().find(j => j.id === job.id)!;
+    const final = scheduler.list().find((j) => j.id === job.id)!;
     expect(final.lastStatus).toBe("success");
     expect(final.runCount).toBe(1);
-    expect(final.enabled).toBe(false);  // one-shot auto-disabled
+    expect(final.enabled).toBe(false); // one-shot auto-disabled
     expect(final.lastRun).toBeDefined();
   });
 
   it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
-    const manager = makeFaithfulManager("error");  // Agent terminates with error status
+    const manager = makeFaithfulManager("error"); // Agent terminates with error status
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
@@ -128,10 +130,10 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     });
 
     await waitFor(() => manager.spawn.mock.calls.length === 1);
-    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus !== "running");
+    await waitFor(() => scheduler.list().find((j) => j.id === job.id)?.lastStatus !== "running");
 
-    expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
-    expect(scheduler.list().find(j => j.id === job.id)?.runCount).toBe(1);
+    expect(scheduler.list().find((j) => j.id === job.id)?.lastStatus).toBe("error");
+    expect(scheduler.list().find((j) => j.id === job.id)?.runCount).toBe(1);
   });
 
   it("interval job: fires repeatedly, runCount grows", async () => {
@@ -143,7 +145,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const job = scheduler.addJob({
       name: "e2e-interval",
       description: "test",
-      schedule: "100s",  // Will be too long; override below.
+      schedule: "100s", // Will be too long; override below.
       subagent_type: "general-purpose",
       prompt: "tick",
     });
@@ -153,10 +155,10 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
     await waitFor(() => manager.spawn.mock.calls.length >= 3, 2000);
 
-    const final = scheduler.list().find(j => j.id === job.id)!;
+    const final = scheduler.list().find((j) => j.id === job.id)!;
     expect(final.runCount).toBeGreaterThanOrEqual(3);
     expect(final.lastStatus).toBe("success");
-    expect(final.enabled).toBe(true);  // intervals don't auto-disable
+    expect(final.enabled).toBe(true); // intervals don't auto-disable
 
     scheduler.removeJob(job.id);
   });
@@ -166,7 +168,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = new Date(Date.now() + 60_000).toISOString();  // far enough not to fire
+    const future = new Date(Date.now() + 60_000).toISOString(); // far enough not to fire
     const job = scheduler.addJob({
       name: "persistent",
       description: "x",
@@ -215,8 +217,11 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
     const future = new Date(Date.now() + 100).toISOString();
     const job = scheduler.addJob({
-      name: "events", description: "x", schedule: future,
-      subagent_type: "general-purpose", prompt: "x",
+      name: "events",
+      description: "x",
+      schedule: future,
+      subagent_type: "general-purpose",
+      prompt: "x",
     });
 
     await waitFor(() => manager.spawn.mock.calls.length === 1);

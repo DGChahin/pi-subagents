@@ -66,12 +66,13 @@ const textOf = (r: any): string => r.content[0].text;
 
 function runUntilAborted(_ctx: any, _type: any, _prompt: any, options: any) {
   return new Promise((resolve) => {
-    const finish = () => resolve({
-      responseText: "",
-      session: { dispose: vi.fn() },
-      aborted: true,
-      steered: false,
-    });
+    const finish = () =>
+      resolve({
+        responseText: "",
+        session: { dispose: vi.fn() },
+        aborted: true,
+        steered: false,
+      });
     if (options.signal?.aborted) finish();
     else options.signal?.addEventListener("abort", finish, { once: true });
   }) as any;
@@ -79,13 +80,15 @@ function runUntilAborted(_ctx: any, _type: any, _prompt: any, options: any) {
 
 async function spawnBackground(tools: Map<string, any>): Promise<string> {
   vi.mocked(runAgent).mockImplementation(runUntilAborted);
-  const r = await tools.get("Agent").execute(
-    "tc-spawn",
-    { prompt: "go", description: "registry test agent", subagent_type: "general-purpose", run_in_background: true },
-    undefined,
-    undefined,
-    ctx(),
-  );
+  const r = await tools
+    .get("Agent")
+    .execute(
+      "tc-spawn",
+      { prompt: "go", description: "registry test agent", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
   return /Agent ID: (\S+)/.exec(textOf(r))![1];
 }
 
@@ -142,7 +145,9 @@ describe("the registry spawn strips internal capabilities", () => {
     vi.mocked(runAgent).mockImplementation(runUntilAborted);
     const entry = (globalThis as any)[MANAGER_KEY];
     const id = entry.spawn(root.pi, ctx(), "general-purpose", "go", {
-      description: "forged", isBackground: true, ...options,
+      description: "forged",
+      isBackground: true,
+      ...options,
     });
     return { entry, id, root, runOpts: () => vi.mocked(runAgent).mock.calls[0][3] as any };
   }
@@ -153,7 +158,9 @@ describe("the registry spawn strips internal capabilities", () => {
     const { entry, id, root } = forge({ parentAgentId: "victim-agent-id", depth: 9, maxSubagentDepth: 99 });
 
     expect(entry.getRecord(id)).toMatchObject({
-      parentAgentId: undefined, depth: 1, maxSubagentDepth: undefined,
+      parentAgentId: undefined,
+      depth: 1,
+      maxSubagentDepth: undefined,
     });
     await root.lifecycle.get("session_shutdown")?.();
   });

@@ -23,15 +23,23 @@ describe("documented defaults (README:441)", () => {
   // rather than a retry.
   const HEAVY_REIMPORT_MS = 60_000;
 
-  it("grace turns after the soft limit default to 5", async () => {
-    const { getGraceTurns } = await import("../src/agent-runner.js");
-    expect(getGraceTurns()).toBe(5);
-  }, HEAVY_REIMPORT_MS);
+  it(
+    "grace turns after the soft limit default to 5",
+    async () => {
+      const { getGraceTurns } = await import("../src/agent-runner.js");
+      expect(getGraceTurns()).toBe(5);
+    },
+    HEAVY_REIMPORT_MS,
+  );
 
-  it("max turns is unlimited by default", async () => {
-    const { getDefaultMaxTurns } = await import("../src/agent-runner.js");
-    expect(getDefaultMaxTurns()).toBeUndefined();
-  }, HEAVY_REIMPORT_MS);
+  it(
+    "max turns is unlimited by default",
+    async () => {
+      const { getDefaultMaxTurns } = await import("../src/agent-runner.js");
+      expect(getDefaultMaxTurns()).toBeUndefined();
+    },
+    HEAVY_REIMPORT_MS,
+  );
 
   it("nested subagent depth defaults to 2", async () => {
     const { getMaxSubagentDepth } = await import("../src/nested-tools.js");
@@ -58,8 +66,14 @@ describe("documented defaults (README:441)", () => {
     // nested-tools.ts passes false unconditionally.
     expect(resolveAgentInvocationConfig(undefined, {}, { defaultRunInBackground: false }).runInBackground).toBe(false);
     // An explicit param still wins over either default.
-    expect(resolveAgentInvocationConfig(undefined, { run_in_background: false }, { defaultRunInBackground: true }).runInBackground).toBe(false);
-    expect(resolveAgentInvocationConfig(undefined, { run_in_background: true }, { defaultRunInBackground: false }).runInBackground).toBe(true);
+    expect(
+      resolveAgentInvocationConfig(undefined, { run_in_background: false }, { defaultRunInBackground: true })
+        .runInBackground,
+    ).toBe(false);
+    expect(
+      resolveAgentInvocationConfig(undefined, { run_in_background: true }, { defaultRunInBackground: false })
+        .runInBackground,
+    ).toBe(true);
   });
 
   it("model scope is off by default", async () => {

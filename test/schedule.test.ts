@@ -65,13 +65,13 @@ describe("SubagentScheduler — static format parsers", () => {
     expect(SubagentScheduler.parseInterval("1h")).toBe(3_600_000);
     expect(SubagentScheduler.parseInterval("2d")).toBe(172_800_000);
 
-    expect(SubagentScheduler.parseInterval("+5m")).toBeNull();   // relative isn't an interval
+    expect(SubagentScheduler.parseInterval("+5m")).toBeNull(); // relative isn't an interval
     expect(SubagentScheduler.parseInterval("5x")).toBeNull();
     expect(SubagentScheduler.parseInterval("five-minutes")).toBeNull();
   });
 
   it("validateCronExpression rejects non-6-field expressions", () => {
-    expect(SubagentScheduler.validateCronExpression("* * * * *").valid).toBe(false);  // 5 fields
+    expect(SubagentScheduler.validateCronExpression("* * * * *").valid).toBe(false); // 5 fields
     expect(SubagentScheduler.validateCronExpression("0 0 9 * * 1").valid).toBe(true);
     expect(SubagentScheduler.validateCronExpression("0 0 9 * * *").valid).toBe(true);
     expect(SubagentScheduler.validateCronExpression("not-a-cron").valid).toBe(false);
@@ -136,20 +136,41 @@ describe("SubagentScheduler — lifecycle", () => {
 
   it("addJob rejects duplicate names", () => {
     scheduler.addJob({ name: "j1", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p" });
-    expect(() => scheduler.addJob({
-      name: "j1", description: "y", schedule: "2h", subagent_type: "general-purpose", prompt: "p2",
-    })).toThrow(/already exists/);
+    expect(() =>
+      scheduler.addJob({
+        name: "j1",
+        description: "y",
+        schedule: "2h",
+        subagent_type: "general-purpose",
+        prompt: "p2",
+      }),
+    ).toThrow(/already exists/);
   });
 
   it("removeJob clears the job and emits removed", () => {
-    const job = scheduler.addJob({ name: "j1", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p" });
+    const job = scheduler.addJob({
+      name: "j1",
+      description: "x",
+      schedule: "1h",
+      subagent_type: "general-purpose",
+      prompt: "p",
+    });
     expect(scheduler.removeJob(job.id)).toBe(true);
     expect(scheduler.list()).toEqual([]);
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({ type: "removed", jobId: job.id }));
+    expect(pi.events.emit).toHaveBeenCalledWith(
+      "subagents:scheduled",
+      expect.objectContaining({ type: "removed", jobId: job.id }),
+    );
   });
 
   it("updateJob({enabled: false}) unschedules but keeps the record", () => {
-    const job = scheduler.addJob({ name: "j1", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p" });
+    const job = scheduler.addJob({
+      name: "j1",
+      description: "x",
+      schedule: "1h",
+      subagent_type: "general-purpose",
+      prompt: "p",
+    });
     scheduler.updateJob(job.id, { enabled: false });
     expect(scheduler.list()[0].enabled).toBe(false);
     expect(scheduler.getNextRun(job.id)).toBeUndefined();
@@ -161,8 +182,11 @@ describe("SubagentScheduler — lifecycle", () => {
   it("getNextRun returns an approximate future time for a fresh interval (no lastRun yet)", () => {
     const before = Date.now();
     const job = scheduler.addJob({
-      name: "fresh-interval", description: "x", schedule: "1h",
-      subagent_type: "general-purpose", prompt: "p",
+      name: "fresh-interval",
+      description: "x",
+      schedule: "1h",
+      subagent_type: "general-purpose",
+      prompt: "p",
     });
     const next = scheduler.getNextRun(job.id);
     expect(next).toBeDefined();
@@ -175,8 +199,11 @@ describe("SubagentScheduler — lifecycle", () => {
   // Once a fire happens and `lastRun` is set, getNextRun should pivot to it.
   it("getNextRun uses lastRun when present for interval jobs", () => {
     const job = scheduler.addJob({
-      name: "ran-once", description: "x", schedule: "1h",
-      subagent_type: "general-purpose", prompt: "p",
+      name: "ran-once",
+      description: "x",
+      schedule: "1h",
+      subagent_type: "general-purpose",
+      prompt: "p",
     });
     const lastRun = new Date(Date.now() - 30 * 60_000).toISOString(); // 30m ago
     scheduler.updateJob(job.id, { lastRun });
@@ -186,9 +213,15 @@ describe("SubagentScheduler — lifecycle", () => {
 
   it("rejects past one-shot timestamps upfront — no record created", () => {
     const past = new Date(Date.now() - 60_000).toISOString();
-    expect(() => scheduler.addJob({
-      name: "past", description: "x", schedule: past, subagent_type: "general-purpose", prompt: "p",
-    })).toThrow(/in the past/);
+    expect(() =>
+      scheduler.addJob({
+        name: "past",
+        description: "x",
+        schedule: past,
+        subagent_type: "general-purpose",
+        prompt: "p",
+      }),
+    ).toThrow(/in the past/);
     // No dead-on-arrival record left behind
     expect(scheduler.list()).toEqual([]);
   });
@@ -218,12 +251,17 @@ describe("SubagentScheduler — lifecycle", () => {
     scheduler.stop();
     scheduler.start(pi, ctx, manager, store);
 
-    const reloaded = scheduler.list().find(j => j.id === "reload-test");
+    const reloaded = scheduler.list().find((j) => j.id === "reload-test");
     expect(reloaded?.enabled).toBe(false);
     expect(reloaded?.lastStatus).toBe("error");
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({
-      type: "error", jobId: "reload-test", error: expect.stringMatching(/in the past/),
-    }));
+    expect(pi.events.emit).toHaveBeenCalledWith(
+      "subagents:scheduled",
+      expect.objectContaining({
+        type: "error",
+        jobId: "reload-test",
+        error: expect.stringMatching(/in the past/),
+      }),
+    );
   });
 });
 
@@ -258,8 +296,11 @@ describe("SubagentScheduler — fire path", () => {
 
   it("interval jobs fire repeatedly via setInterval", () => {
     scheduler.addJob({
-      name: "every-10s", description: "tick", schedule: "10s",
-      subagent_type: "general-purpose", prompt: "tick",
+      name: "every-10s",
+      description: "tick",
+      schedule: "10s",
+      subagent_type: "general-purpose",
+      prompt: "tick",
     });
 
     expect(manager.spawn).toHaveBeenCalledTimes(0);
@@ -275,8 +316,11 @@ describe("SubagentScheduler — fire path", () => {
     registerAgents(new Map());
     setFallbackSubagent(NO_FALLBACK);
     const job = scheduler.addJob({
-      name: "gone", description: "vanished agent", schedule: "+1s",
-      subagent_type: "deleted-since", prompt: "run",
+      name: "gone",
+      description: "vanished agent",
+      schedule: "+1s",
+      subagent_type: "deleted-since",
+      prompt: "run",
     });
 
     vi.advanceTimersByTime(2_000);
@@ -297,15 +341,18 @@ describe("SubagentScheduler — fire path", () => {
 
   it("one-shot fires once and auto-disables", async () => {
     const job = scheduler.addJob({
-      name: "soon", description: "once", schedule: "+1s",
-      subagent_type: "general-purpose", prompt: "once",
+      name: "soon",
+      description: "once",
+      schedule: "+1s",
+      subagent_type: "general-purpose",
+      prompt: "once",
     });
 
     vi.advanceTimersByTime(2_000);
     expect(manager.spawn).toHaveBeenCalledTimes(1);
 
     // The auto-disable update happens synchronously inside the timer callback
-    expect(scheduler.list().find(j => j.id === job.id)?.enabled).toBe(false);
+    expect(scheduler.list().find((j) => j.id === job.id)?.enabled).toBe(false);
 
     // Subsequent ticks shouldn't fire again
     vi.advanceTimersByTime(60_000);
@@ -314,8 +361,11 @@ describe("SubagentScheduler — fire path", () => {
 
   it("fire passes bypassQueue: true to manager.spawn", () => {
     scheduler.addJob({
-      name: "every-1s", description: "x", schedule: "1s",
-      subagent_type: "general-purpose", prompt: "x",
+      name: "every-1s",
+      description: "x",
+      schedule: "1s",
+      subagent_type: "general-purpose",
+      prompt: "x",
     });
 
     vi.advanceTimersByTime(1_000);
@@ -327,8 +377,11 @@ describe("SubagentScheduler — fire path", () => {
 
   it("disabled jobs do not fire", () => {
     const job = scheduler.addJob({
-      name: "off", description: "x", schedule: "1s",
-      subagent_type: "general-purpose", prompt: "x",
+      name: "off",
+      description: "x",
+      schedule: "1s",
+      subagent_type: "general-purpose",
+      prompt: "x",
     });
     scheduler.updateJob(job.id, { enabled: false });
     vi.advanceTimersByTime(5_000);
@@ -337,28 +390,46 @@ describe("SubagentScheduler — fire path", () => {
 
   it("emits fired event with agentId on successful spawn", () => {
     scheduler.addJob({
-      name: "fire-once", description: "x", schedule: "+1s",
-      subagent_type: "general-purpose", prompt: "x",
+      name: "fire-once",
+      description: "x",
+      schedule: "+1s",
+      subagent_type: "general-purpose",
+      prompt: "x",
     });
     vi.advanceTimersByTime(2_000);
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({
-      type: "fired", name: "fire-once", agentId: expect.stringMatching(/^agent-/),
-    }));
+    expect(pi.events.emit).toHaveBeenCalledWith(
+      "subagents:scheduled",
+      expect.objectContaining({
+        type: "fired",
+        name: "fire-once",
+        agentId: expect.stringMatching(/^agent-/),
+      }),
+    );
   });
 
   it("records lastStatus error and emits when manager.spawn throws", async () => {
-    manager.spawn.mockImplementationOnce(() => { throw new Error("no slots"); });
+    manager.spawn.mockImplementationOnce(() => {
+      throw new Error("no slots");
+    });
     const job = scheduler.addJob({
-      name: "boom", description: "x", schedule: "+1s",
-      subagent_type: "general-purpose", prompt: "x",
+      name: "boom",
+      description: "x",
+      schedule: "+1s",
+      subagent_type: "general-purpose",
+      prompt: "x",
     });
     vi.advanceTimersByTime(2_000);
 
     // Update is synchronous in the spawn-throw path
-    expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({
-      type: "error", jobId: job.id, error: "no slots",
-    }));
+    expect(scheduler.list().find((j) => j.id === job.id)?.lastStatus).toBe("error");
+    expect(pi.events.emit).toHaveBeenCalledWith(
+      "subagents:scheduled",
+      expect.objectContaining({
+        type: "error",
+        jobId: job.id,
+        error: "no slots",
+      }),
+    );
   });
 
   // ── Status reflection from record.status (regression for bug #1) ────
@@ -373,7 +444,9 @@ describe("SubagentScheduler — fire path", () => {
       manager.spawn.mockImplementation(() => {
         const id = "agent-" + Math.random().toString(36).slice(2, 10);
         let resolve!: () => void;
-        const promise = new Promise<string>(r => { resolve = () => r(""); });
+        const promise = new Promise<string>((r) => {
+          resolve = () => r("");
+        });
         records.set(id, { status: "running", promise, resolve });
         return id;
       });
@@ -384,8 +457,11 @@ describe("SubagentScheduler — fire path", () => {
     it("records lastStatus 'error' when the agent terminates with status='error'", async () => {
       const records = installFaithfulMock();
       const job = scheduler.addJob({
-        name: "fail-job", description: "x", schedule: "+1s",
-        subagent_type: "general-purpose", prompt: "x",
+        name: "fail-job",
+        description: "x",
+        schedule: "+1s",
+        subagent_type: "general-purpose",
+        prompt: "x",
       });
 
       vi.advanceTimersByTime(2_000);
@@ -399,14 +475,17 @@ describe("SubagentScheduler — fire path", () => {
       // Flush microtasks so .then(finalize) runs.
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
+      expect(scheduler.list().find((j) => j.id === job.id)?.lastStatus).toBe("error");
     });
 
     it("records lastStatus 'success' when the agent terminates with status='completed'", async () => {
       const records = installFaithfulMock();
       const job = scheduler.addJob({
-        name: "ok-job", description: "x", schedule: "+1s",
-        subagent_type: "general-purpose", prompt: "x",
+        name: "ok-job",
+        description: "x",
+        schedule: "+1s",
+        subagent_type: "general-purpose",
+        prompt: "x",
       });
 
       vi.advanceTimersByTime(2_000);
@@ -416,18 +495,24 @@ describe("SubagentScheduler — fire path", () => {
 
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("success");
+      expect(scheduler.list().find((j) => j.id === job.id)?.lastStatus).toBe("success");
     });
 
     it("treats aborted and stopped as errors (terminal failure states)", async () => {
       const records = installFaithfulMock();
       const a = scheduler.addJob({
-        name: "abort-job", description: "x", schedule: "+1s",
-        subagent_type: "general-purpose", prompt: "x",
+        name: "abort-job",
+        description: "x",
+        schedule: "+1s",
+        subagent_type: "general-purpose",
+        prompt: "x",
       });
       const b = scheduler.addJob({
-        name: "stop-job", description: "x", schedule: "+2s",
-        subagent_type: "general-purpose", prompt: "x",
+        name: "stop-job",
+        description: "x",
+        schedule: "+2s",
+        subagent_type: "general-purpose",
+        prompt: "x",
       });
 
       vi.advanceTimersByTime(3_000);
@@ -439,8 +524,8 @@ describe("SubagentScheduler — fire path", () => {
 
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(scheduler.list().find(j => j.id === a.id)?.lastStatus).toBe("error");
-      expect(scheduler.list().find(j => j.id === b.id)?.lastStatus).toBe("error");
+      expect(scheduler.list().find((j) => j.id === a.id)?.lastStatus).toBe("error");
+      expect(scheduler.list().find((j) => j.id === b.id)?.lastStatus).toBe("error");
     });
   });
 });
@@ -448,9 +533,15 @@ describe("SubagentScheduler — fire path", () => {
 describe("SubagentScheduler — stopped state", () => {
   it("throws on mutation when not started", () => {
     const scheduler = new SubagentScheduler();
-    expect(() => scheduler.addJob({
-      name: "x", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p",
-    })).toThrow(/not started/);
+    expect(() =>
+      scheduler.addJob({
+        name: "x",
+        description: "x",
+        schedule: "1h",
+        subagent_type: "general-purpose",
+        prompt: "p",
+      }),
+    ).toThrow(/not started/);
   });
 
   it("list() returns empty array when not started", () => {

@@ -14,11 +14,14 @@ describe("child session async context", () => {
   });
 
   it("prevents a child resource load from creating another extension manager", async () => {
-    const pi = new Proxy({}, {
-      get: vi.fn(() => {
-        throw new Error("child extension factory must be a no-op");
-      }),
-    });
+    const pi = new Proxy(
+      {},
+      {
+        get: vi.fn(() => {
+          throw new Error("child extension factory must be a no-op");
+        }),
+      },
+    );
 
     await runInChildSessionContext(async () => {
       expect(() => subagentsExtension(pi as any)).not.toThrow();

@@ -46,7 +46,7 @@ function restorePatchState(): void {
 
 function makePi() {
   const existingTools = new Map<string, any>([
-    ...BUILTIN_TOOL_NAMES.map(name => [name, { name, owner: "pi" }] as const),
+    ...BUILTIN_TOOL_NAMES.map((name) => [name, { name, owner: "pi" }] as const),
     ["web_search", { name: "web_search", owner: "foreign-extension" }],
   ]);
   const tools = new Map(existingTools);
@@ -106,7 +106,9 @@ const flush = async () => {
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise; });
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
   return { promise, resolve };
 }
 
@@ -119,7 +121,7 @@ async function startMainPrompt(lifecycle: Lifecycle, ctx: TestContext, prompt: s
   await lifecycle.get("agent_start")?.({}, ctx);
   await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
   await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("FleetView wiring (real extension lifecycle)", () => {
@@ -141,7 +143,10 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     // async join → completion routes straight to sendIndividualNudge (no batch
     // debounce), so fleet.onAgentFinished fires synchronously on the result.
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, defaultJoinMode: "async" }));
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ schedulingEnabled: false, defaultJoinMode: "async" }),
+    );
     process.chdir(tmpDir);
   });
 
@@ -179,17 +184,19 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     const ui = uiCtx();
     await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui)); // fleet captures THIS ui
 
-    const spawn = await tools.get("Agent").execute(
-      "tc",
-      { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
-      undefined,
-      undefined,
-      ctxWith(uiCtx()),
-    );
+    const spawn = await tools
+      .get("Agent")
+      .execute(
+        "tc",
+        { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
+        undefined,
+        undefined,
+        ctxWith(uiCtx()),
+      );
     expect(textOf(spawn)).toMatch(/Agent ID:/);
     await flush(); // completion → fleet.onAgentFinished → update → widget registers
 
-    const fleetRegs = ui.setWidget.mock.calls.filter(c => c[0] === "fleet" && typeof c[1] === "function");
+    const fleetRegs = ui.setWidget.mock.calls.filter((c) => c[0] === "fleet" && typeof c[1] === "function");
     expect(fleetRegs.length, "fleet widget should register with a render factory").toBeGreaterThan(0);
 
     await lifecycle.get("session_shutdown")?.({}, ctxWith(uiCtx()));
@@ -221,21 +228,27 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     await lifecycle.get("agent_start")?.({}, ctx);
     await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
     await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vi.mocked(pi.appendEntry).mock.calls[0]?.[0]).toBe("subagents:activity");
     await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
-    await lifecycle.get("message_update")?.({
-      assistantMessageEvent: { type: "thinking_delta", delta: "checking" },
-    }, ctx);
+    await lifecycle.get("message_update")?.(
+      {
+        assistantMessageEvent: { type: "thinking_delta", delta: "checking" },
+      },
+      ctx,
+    );
     await lifecycle.get("tool_execution_start")?.({ toolName: "read" }, ctx);
     await lifecycle.get("tool_execution_end")?.({ toolName: "read" }, ctx);
     await lifecycle.get("turn_end")?.({}, ctx);
-    await lifecycle.get("message_end")?.({
-      message: {
-        role: "assistant",
-        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+    await lifecycle.get("message_end")?.(
+      {
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+        },
       },
-    }, ctx);
+      ctx,
+    );
     await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     await lifecycle.get("agent_settled")?.({}, ctx);
     expect(AssistantMessageComponent.prototype.updateContent).not.toBe(originalAssistantUpdateContent);
@@ -264,19 +277,25 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     const ui = uiCtx();
     const ctx = ctxWith(ui);
     await startMainPrompt(lifecycle, ctx, "delegate");
-    const activityEntries = () => vi.mocked(pi.appendEntry).mock.calls
-      .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
-    const finalEntries = () => vi.mocked(pi.appendEntry).mock.calls
-      .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+    const activityEntries = () =>
+      vi
+        .mocked(pi.appendEntry)
+        .mock.calls.filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+    const finalEntries = () =>
+      vi
+        .mocked(pi.appendEntry)
+        .mock.calls.filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
     expect(activityEntries()).toHaveLength(1);
 
-    const spawn = await tools.get("Agent").execute(
-      "tc-agent",
-      { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const spawn = await tools
+      .get("Agent")
+      .execute(
+        "tc-agent",
+        { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
+        undefined,
+        undefined,
+        ctx,
+      );
     const agentId = spawn.details?.agentId;
     expect(agentId).toEqual(expect.any(String));
     expect(spawn.details).toMatchObject({ agentId });
@@ -289,7 +308,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
 
     await flush();
-    await new Promise(resolve => setTimeout(resolve, 220));
+    await new Promise((resolve) => setTimeout(resolve, 220));
     expect(pi.appendEntry).toHaveBeenCalledWith(
       "subagents:record",
       expect.objectContaining({ id: agentId, status: "completed" }),
@@ -299,15 +318,21 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     await lifecycle.get("before_agent_start")?.({ prompt: "continue" }, ctx);
     await lifecycle.get("agent_start")?.({}, ctx);
     await lifecycle.get("message_start")?.({ message: { role: "assistant" } }, ctx);
-    await lifecycle.get("message_update")?.({
-      assistantMessageEvent: { type: "text_delta", delta: "continuing" },
-    }, ctx);
-    await lifecycle.get("message_end")?.({
-      message: {
-        role: "assistant",
-        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+    await lifecycle.get("message_update")?.(
+      {
+        assistantMessageEvent: { type: "text_delta", delta: "continuing" },
       },
-    }, ctx);
+      ctx,
+    );
+    await lifecycle.get("message_end")?.(
+      {
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } },
+        },
+      },
+      ctx,
+    );
     await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     await lifecycle.get("agent_settled")?.({}, ctx);
     expect(activityEntries()).toHaveLength(1);
@@ -329,23 +354,29 @@ describe("FleetView wiring (real extension lifecycle)", () => {
 
     try {
       await startMainPrompt(lifecycle, ctx, "delegate");
-      const spawn = await tools.get("Agent").execute(
-        "tc-pending",
-        { prompt: "go", description: "pending", subagent_type: "general-purpose", run_in_background: true },
-        undefined,
-        undefined,
-        ctx,
-      );
+      const spawn = await tools
+        .get("Agent")
+        .execute(
+          "tc-pending",
+          { prompt: "go", description: "pending", subagent_type: "general-purpose", run_in_background: true },
+          undefined,
+          undefined,
+          ctx,
+        );
       expect(spawn.details?.agentId).toEqual(expect.any(String));
 
       await lifecycle.get("tool_execution_end")?.({ toolName: "Agent", isError: false, result: spawn }, ctx);
       await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
       await lifecycle.get("agent_settled")?.({}, ctx);
 
-      const mainActivityEntries = () => vi.mocked(pi.appendEntry).mock.calls
-        .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
-      const mainFinalEntries = () => vi.mocked(pi.appendEntry).mock.calls
-        .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+      const mainActivityEntries = () =>
+        vi
+          .mocked(pi.appendEntry)
+          .mock.calls.filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+      const mainFinalEntries = () =>
+        vi
+          .mocked(pi.appendEntry)
+          .mock.calls.filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
       expect(mainActivityEntries()).toHaveLength(1);
       expect(mainFinalEntries()).toHaveLength(0);
 
@@ -353,7 +384,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       await lifecycle.get("agent_start")?.({}, ctx);
       await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
       await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(mainActivityEntries()).toHaveLength(2);
       expect(mainActivityEntries().map(([, data]) => data)).toEqual([
@@ -388,13 +419,15 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     const ctx = ctxWith(ui);
     await startMainPrompt(lifecycle, ctx, "validate");
     const runCallsBefore = vi.mocked(runAgent).mock.calls.length;
-    const validation = await tools.get("Agent").execute(
-      "tc-validation",
-      { prompt: "check", description: "validation", subagent_type: "general-purpose", run_in_background: false },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const validation = await tools
+      .get("Agent")
+      .execute(
+        "tc-validation",
+        { prompt: "check", description: "validation", subagent_type: "general-purpose", run_in_background: false },
+        undefined,
+        undefined,
+        ctx,
+      );
     expect(validation.details).toBeUndefined();
     expect(vi.mocked(runAgent).mock.calls).toHaveLength(runCallsBefore);
 
@@ -457,10 +490,14 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
       await lifecycle.get("agent_settled")?.({}, ctx);
 
-      const mainActivityEntries = () => vi.mocked(pi.appendEntry).mock.calls
-        .filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
-      const mainFinalEntries = () => vi.mocked(pi.appendEntry).mock.calls
-        .filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
+      const mainActivityEntries = () =>
+        vi
+          .mocked(pi.appendEntry)
+          .mock.calls.filter(([type, data]) => type === "subagents:activity" && data?.displayName === "Main");
+      const mainFinalEntries = () =>
+        vi
+          .mocked(pi.appendEntry)
+          .mock.calls.filter(([type, data]) => type === "subagents:activity-final" && data?.displayName === "Main");
       expect(mainActivityEntries()).toHaveLength(1);
       expect(mainFinalEntries()).toHaveLength(0);
       expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith("");
@@ -515,8 +552,18 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       expect(ui.setHiddenThinkingLabel).toHaveBeenCalledWith("");
       expect(ui.setHiddenThinkingLabel).toHaveBeenLastCalledWith();
     } finally {
-      firstRun.resolve({ responseText: "first done", session: { dispose: vi.fn() } as any, aborted: false, steered: false });
-      secondRun.resolve({ responseText: "second done", session: { dispose: vi.fn() } as any, aborted: false, steered: false });
+      firstRun.resolve({
+        responseText: "first done",
+        session: { dispose: vi.fn() } as any,
+        aborted: false,
+        steered: false,
+      });
+      secondRun.resolve({
+        responseText: "second done",
+        session: { dispose: vi.fn() } as any,
+        aborted: false,
+        steered: false,
+      });
       vi.useRealTimers();
       await lifecycle.get("session_shutdown")?.({}, ctx);
     }
@@ -540,7 +587,10 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       await lifecycle.get("session_shutdown")?.({}, ctx);
     }
   });
-  it.each(["session_before_switch", "session_shutdown"] as const)("%s restores the original row renderers", async event => {
+  it.each([
+    "session_before_switch",
+    "session_shutdown",
+  ] as const)("%s restores the original row renderers", async (event) => {
     const { pi, lifecycle } = makePi();
     subagentsExtension(pi);
     const ctx = ctxWith(uiCtx());
@@ -593,16 +643,17 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     await lifecycle.get("agent_start")?.({}, ctx);
     await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
     await lifecycle.get("message_end")?.({ message: { role: "user" } }, ctx);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await lifecycle.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
     await lifecycle.get("agent_settled")?.({}, ctx);
-    const activityEntries = () => vi.mocked(pi.appendEntry).mock.calls.filter(([type]) => type === "subagents:activity");
+    const activityEntries = () =>
+      vi.mocked(pi.appendEntry).mock.calls.filter(([type]) => type === "subagents:activity");
     expect(activityEntries()).toHaveLength(1);
     await lifecycle.get("before_agent_start")?.({ prompt: "second" }, ctx);
     await lifecycle.get("agent_start")?.({}, ctx);
     expect(activityEntries()).toHaveLength(1);
     await lifecycle.get("message_start")?.({ message: { role: "user" } }, ctx);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(activityEntries()).toHaveLength(2);
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
@@ -621,7 +672,4 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(entries.at(-1)?.[0]).toBe("subagents:activity-final");
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
-
-
-
 });

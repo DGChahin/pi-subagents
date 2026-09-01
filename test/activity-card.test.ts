@@ -167,11 +167,7 @@ describe("activity cards", () => {
       type: "thinking",
       fullText: "first line\n\nsecond\tline",
     });
-    const thinking = createActivityCardComponent(
-      thinkingStore,
-      toActivityCardData(thinkingRecord),
-      theme,
-    ).render(160);
+    const thinking = createActivityCardComponent(thinkingStore, toActivityCardData(thinkingRecord), theme).render(160);
     expect(thinking[3]).toContain("⎿  thinking: first line second line");
     expect(thinking[3]).not.toContain("\n");
 
@@ -182,11 +178,7 @@ describe("activity cards", () => {
       type: "text",
       fullText: "first response\nsecond\tresponse",
     });
-    const response = createActivityCardComponent(
-      responseStore,
-      toActivityCardData(responseRecord),
-      theme,
-    ).render(160);
+    const response = createActivityCardComponent(responseStore, toActivityCardData(responseRecord), theme).render(160);
     expect(response[3]).toContain("⎿  first response second response");
     expect(response[3]).not.toContain("\n");
   });

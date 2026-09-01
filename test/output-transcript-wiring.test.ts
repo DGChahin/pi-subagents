@@ -22,7 +22,12 @@ vi.mock("../src/output-file.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { createOutputFilePath, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import {
+  createOutputFilePath,
+  setOutputTranscriptDefault,
+  streamToOutputFile,
+  writeInitialEntry,
+} from "../src/output-file.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -107,17 +112,22 @@ describe("output_transcript agent wiring", () => {
   });
 
   it("creates no transcript when a custom agent sets output_transcript false", async () => {
-    writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\n---\n\nKeep data in memory.`);
+    writeFileSync(
+      join(agentDir, "agents", "sensitive.md"),
+      `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\n---\n\nKeep data in memory.`,
+    );
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tool-call",
-      { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
-      undefined,
-      undefined,
-      makeCtx(cwd),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tool-call",
+        { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      );
 
     expect(createOutputFilePath).not.toHaveBeenCalled();
     expect(writeInitialEntry).not.toHaveBeenCalled();
@@ -126,17 +136,22 @@ describe("output_transcript agent wiring", () => {
   });
 
   it("also suppresses the background transcript", async () => {
-    writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\nrun_in_background: true\n---\n\nKeep data in memory.`);
+    writeFileSync(
+      join(agentDir, "agents", "sensitive.md"),
+      `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\nrun_in_background: true\n---\n\nKeep data in memory.`,
+    );
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tool-call",
-      { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
-      undefined,
-      undefined,
-      makeCtx(cwd),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tool-call",
+        { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      );
 
     expect(createOutputFilePath).not.toHaveBeenCalled();
     expect(writeInitialEntry).not.toHaveBeenCalled();
@@ -148,13 +163,15 @@ describe("output_transcript agent wiring", () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tool-call",
-      { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
-      undefined,
-      undefined,
-      makeCtx(cwd),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tool-call",
+        { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      );
 
     expect(createOutputFilePath).toHaveBeenCalledOnce();
     expect(writeInitialEntry).toHaveBeenCalledOnce();
@@ -164,17 +181,22 @@ describe("output_transcript agent wiring", () => {
 
   it("suppresses the transcript project-wide when subagents.json sets outputTranscript false", async () => {
     // A plain default agent (no frontmatter) inherits the project default.
-    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
+    writeFileSync(
+      join(cwd, ".pi", "subagents.json"),
+      JSON.stringify({ schedulingEnabled: false, outputTranscript: false }),
+    );
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tool-call",
-      { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
-      undefined,
-      undefined,
-      makeCtx(cwd),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tool-call",
+        { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      );
 
     expect(createOutputFilePath).not.toHaveBeenCalled();
     expect(writeInitialEntry).not.toHaveBeenCalled();
@@ -183,18 +205,26 @@ describe("output_transcript agent wiring", () => {
   });
 
   it("lets agent frontmatter output_transcript true override a project outputTranscript false", async () => {
-    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
-    writeFileSync(join(agentDir, "agents", "audited.md"), `---\ndescription: Always keeps a transcript\noutput_transcript: true\n---\n\nWrite a transcript regardless of the project default.`);
+    writeFileSync(
+      join(cwd, ".pi", "subagents.json"),
+      JSON.stringify({ schedulingEnabled: false, outputTranscript: false }),
+    );
+    writeFileSync(
+      join(agentDir, "agents", "audited.md"),
+      `---\ndescription: Always keeps a transcript\noutput_transcript: true\n---\n\nWrite a transcript regardless of the project default.`,
+    );
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
 
-    await tools.get("Agent").execute(
-      "tool-call",
-      { prompt: "audited work", description: "Do audited work", subagent_type: "audited" },
-      undefined,
-      undefined,
-      makeCtx(cwd),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tool-call",
+        { prompt: "audited work", description: "Do audited work", subagent_type: "audited" },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      );
 
     expect(createOutputFilePath).toHaveBeenCalledOnce();
     expect(writeInitialEntry).toHaveBeenCalledOnce();
