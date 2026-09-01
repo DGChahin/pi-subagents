@@ -15,7 +15,7 @@ type PatchRegistry = typeof globalThis & { [PATCH_STATE_KEY]?: AssistantThinking
 function withoutThinking(message: AssistantMessage): AssistantMessage {
   return {
     ...message,
-    content: message.content.filter(content => content.type !== "thinking"),
+    content: message.content.filter((content) => content.type !== "thinking"),
   };
 }
 

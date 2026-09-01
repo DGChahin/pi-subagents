@@ -79,9 +79,10 @@ async function promptly<T>(promise: Promise<T>): Promise<T> {
 
 function hasNotification(pi: any, id: string): boolean {
   return pi.sendMessage.mock.calls.some(
-    ([message]: any[]) => message?.customType === "subagent-notification"
-      && typeof message.content === "string"
-      && message.content.includes(id),
+    ([message]: any[]) =>
+      message?.customType === "subagent-notification" &&
+      typeof message.content === "string" &&
+      message.content.includes(id),
   );
 }
 
@@ -113,7 +114,12 @@ function deferredRuns() {
 async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; queued: boolean }> {
   const r = await tools.get("Agent").execute(
     "tc-spawn",
-    { prompt: "go", description: "queued-wait test agent", subagent_type: "general-purpose", run_in_background: true },
+    {
+      prompt: "go",
+      description: "queued-wait test agent",
+      subagent_type: "general-purpose",
+      run_in_background: true,
+    },
     undefined,
     undefined,
     ctx(),
@@ -146,9 +152,9 @@ describe("top-level get_subagent_result wait semantics", () => {
     const { id } = await spawnBackground(tools);
 
     const result = await promptly(
-      tools.get("get_subagent_result").execute(
-        "tc-wait-running", { agent_id: id, wait: true }, undefined, undefined, ctx(),
-      ),
+      tools
+        .get("get_subagent_result")
+        .execute("tc-wait-running", { agent_id: id, wait: true }, undefined, undefined, ctx()),
     );
     expect(textOf(result)).toContain("Agent is running");
     expect(result.terminate).toBe(true);
@@ -175,9 +181,9 @@ describe("top-level get_subagent_result wait semantics", () => {
     expect(queued.queued).toBe(true);
 
     const result = await promptly(
-      tools.get("get_subagent_result").execute(
-        "tc-wait-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx(),
-      ),
+      tools
+        .get("get_subagent_result")
+        .execute("tc-wait-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx()),
     );
     expect(textOf(result)).toContain("Agent is queued");
     expect(result.terminate).toBe(true);
@@ -197,9 +203,9 @@ describe("top-level get_subagent_result wait semantics", () => {
     await waitForNotification(pi, queued.id);
     expect(hasNotification(pi, queued.id)).toBe(true);
 
-    const terminal = await tools.get("get_subagent_result").execute(
-      "tc-read-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx(),
-    );
+    const terminal = await tools
+      .get("get_subagent_result")
+      .execute("tc-read-queued", { agent_id: queued.id, wait: true }, undefined, undefined, ctx());
     expect(textOf(terminal)).toContain("THE-RESULT-PAYLOAD");
     expect(terminal.terminate).toBeUndefined();
 
@@ -214,9 +220,9 @@ describe("top-level get_subagent_result wait semantics", () => {
     const { id } = await spawnBackground(tools);
 
     const result = await promptly(
-      tools.get("get_subagent_result").execute(
-        "tc-poll-running", { agent_id: id, wait: false }, undefined, undefined, ctx(),
-      ),
+      tools
+        .get("get_subagent_result")
+        .execute("tc-poll-running", { agent_id: id, wait: false }, undefined, undefined, ctx()),
     );
     expect(textOf(result)).toContain("Agent is still running");
     expect(result.terminate).toBeUndefined();

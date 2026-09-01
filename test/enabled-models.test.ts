@@ -15,7 +15,9 @@ const MODELS = [
 
 function makeRegistry(models = MODELS, available?: typeof MODELS): ModelRegistryRef {
   return {
-    getAll() { return models; },
+    getAll() {
+      return models;
+    },
     getAvailable: available ? () => available : undefined,
   };
 }
@@ -57,13 +59,13 @@ describe("readEnabledModels", () => {
   });
 
   it("returns enabledModels from global when project file absent", () => {
-    writeFileSync(globalFile(), JSON.stringify({
-      enabledModels: ["anthropic/claude-sonnet-4-6", "google/gemma-4-31b-it"],
-    }));
-    expect(readEnabledModels(projectDir)).toEqual([
-      "anthropic/claude-sonnet-4-6",
-      "google/gemma-4-31b-it",
-    ]);
+    writeFileSync(
+      globalFile(),
+      JSON.stringify({
+        enabledModels: ["anthropic/claude-sonnet-4-6", "google/gemma-4-31b-it"],
+      }),
+    );
+    expect(readEnabledModels(projectDir)).toEqual(["anthropic/claude-sonnet-4-6", "google/gemma-4-31b-it"]);
   });
 
   it("returns enabledModels from project when global file absent", () => {
@@ -72,18 +74,24 @@ describe("readEnabledModels", () => {
   });
 
   it("project overrides global (array replaces wholly, mirrors pi's deep-merge)", () => {
-    writeFileSync(globalFile(), JSON.stringify({
-      enabledModels: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"],
-    }));
+    writeFileSync(
+      globalFile(),
+      JSON.stringify({
+        enabledModels: ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6"],
+      }),
+    );
     writeProject({ enabledModels: ["anthropic/claude-haiku-4-5"] });
     // Project replaces wholly — globals NOT merged in
     expect(readEnabledModels(projectDir)).toEqual(["anthropic/claude-haiku-4-5"]);
   });
 
   it("falls back to global when project file has no enabledModels field", () => {
-    writeFileSync(globalFile(), JSON.stringify({
-      enabledModels: ["anthropic/claude-sonnet-4-6"],
-    }));
+    writeFileSync(
+      globalFile(),
+      JSON.stringify({
+        enabledModels: ["anthropic/claude-sonnet-4-6"],
+      }),
+    );
     writeProject({ defaultProvider: "anthropic" }); // project exists but no enabledModels
     expect(readEnabledModels(projectDir)).toEqual(["anthropic/claude-sonnet-4-6"]);
   });
@@ -116,7 +124,10 @@ describe("resolveEnabledModels", () => {
   });
 
   it("skips empty string patterns", () => {
-    const result = resolveEnabledModels(["", "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"], makeRegistry());
+    const result = resolveEnabledModels(
+      ["", "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"],
+      makeRegistry(),
+    );
     // Empty string should not match — only exact patterns should match
     expect(result!.size).toBe(2);
   });
@@ -127,18 +138,12 @@ describe("resolveEnabledModels", () => {
   });
 
   it("returns undefined when getAvailable returns empty array", () => {
-    const result = resolveEnabledModels(
-      ["anthropic/claude-haiku-4-5"],
-      makeRegistry(MODELS, []),
-    );
+    const result = resolveEnabledModels(["anthropic/claude-haiku-4-5"], makeRegistry(MODELS, []));
     expect(result).toBeUndefined();
   });
 
   it("deduplicates duplicate patterns", () => {
-    const result = resolveEnabledModels(
-      ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5"],
-      makeRegistry(),
-    );
+    const result = resolveEnabledModels(["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5"], makeRegistry());
     expect(result!.size).toBe(1); // duplicate resolves to one entry
   });
 
@@ -149,10 +154,7 @@ describe("resolveEnabledModels", () => {
     });
 
     it("resolves model id with colon (part of id, not split)", () => {
-      const result = resolveEnabledModels(
-        ["anthropic/claude-opus-4-6"],
-        makeRegistry(),
-      );
+      const result = resolveEnabledModels(["anthropic/claude-opus-4-6"], makeRegistry());
       expect(result).toEqual(new Set(["anthropic/claude-opus-4-6"]));
     });
 
@@ -173,8 +175,6 @@ describe("resolveEnabledModels", () => {
       expect(result).toBeUndefined();
     });
   });
-
-
 
   describe("mixed patterns", () => {
     it("combines multiple exact provider/modelId in one call", () => {

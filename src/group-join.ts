@@ -62,27 +62,28 @@ export class GroupJoinManager {
    * - 'held'      — result held, waiting for group completion
    * - 'delivered'  — this completion triggered the group notification
    */
-  onAgentComplete(completion: AgentRunCompletion): 'delivered' | 'held' | 'pass' {
+  onAgentComplete(completion: AgentRunCompletion): "delivered" | "held" | "pass" {
     const { record, revision } = completion;
     const groupId = this.agentToGroup.get(record.id);
-    if (!groupId) return 'pass';
+    if (!groupId) return "pass";
 
     const group = this.groups.get(groupId);
     if (
-      !group
-      || group.delivered
-      || group.agentRevisions.get(record.id) !== revision
-      || record.runRevision !== revision
-      || record.pendingDeliveryRevision !== revision
-      || record.resultConsumed === true
-    ) return 'pass';
+      !group ||
+      group.delivered ||
+      group.agentRevisions.get(record.id) !== revision ||
+      record.runRevision !== revision ||
+      record.pendingDeliveryRevision !== revision ||
+      record.resultConsumed === true
+    )
+      return "pass";
 
     group.completedRuns.set(record.id, completion);
 
     // All done — deliver immediately
     if (group.completedRuns.size >= group.agentRevisions.size) {
       this.deliver(group, false);
-      return 'delivered';
+      return "delivered";
     }
 
     // First completion in this batch — start timeout
@@ -93,7 +94,7 @@ export class GroupJoinManager {
       }, timeout);
     }
 
-    return 'held';
+    return "held";
   }
 
   private onTimeout(group: AgentGroup): void {
@@ -113,9 +114,10 @@ export class GroupJoinManager {
 
     // Deliver what we have
     const completed = [...group.completedRuns.values()].filter(
-      ({ record, revision }) => record.runRevision === revision
-        && record.pendingDeliveryRevision === revision
-        && record.resultConsumed !== true,
+      ({ record, revision }) =>
+        record.runRevision === revision &&
+        record.pendingDeliveryRevision === revision &&
+        record.resultConsumed !== true,
     );
     if (completed.length > 0) this.deliverCb(completed, true);
 
@@ -134,9 +136,10 @@ export class GroupJoinManager {
     }
     group.delivered = true;
     const completed = [...group.completedRuns.values()].filter(
-      ({ record, revision }) => record.runRevision === revision
-        && record.pendingDeliveryRevision === revision
-        && record.resultConsumed !== true,
+      ({ record, revision }) =>
+        record.runRevision === revision &&
+        record.pendingDeliveryRevision === revision &&
+        record.resultConsumed !== true,
     );
     if (completed.length > 0) this.deliverCb(completed, partial);
     this.cleanupGroup(group.groupId);
@@ -172,7 +175,7 @@ export class GroupJoinManager {
 
   /** Cancel every group and return the completed runs that were held. */
   cancelPending(): readonly AgentRunCompletion[] {
-    const pending = [...this.groups.values()].flatMap(group => [...group.completedRuns.values()]);
+    const pending = [...this.groups.values()].flatMap((group) => [...group.completedRuns.values()]);
     for (const group of this.groups.values()) {
       if (group.timeoutHandle) clearTimeout(group.timeoutHandle);
     }

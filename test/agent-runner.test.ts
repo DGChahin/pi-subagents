@@ -257,9 +257,7 @@ describe("agent-runner final output capture", () => {
     await runAgent(ctx, "Explore", "Say BOUND", { pi });
 
     expect(session.bindExtensions).toHaveBeenCalledTimes(1);
-    expect(session.bindExtensions).toHaveBeenCalledWith(
-      expect.objectContaining({ onError: expect.any(Function) }),
-    );
+    expect(session.bindExtensions).toHaveBeenCalledWith(expect.objectContaining({ onError: expect.any(Function) }));
 
     const bindOrder = session.bindExtensions.mock.invocationCallOrder[0];
     const promptOrder = session.prompt.mock.invocationCallOrder[0];
@@ -273,18 +271,22 @@ describe("agent-runner final output capture", () => {
     await runAgent(ctx, "Explore", "Say CONFIGURED", { pi, cwd: "/tmp/worktree" });
 
     expect(getAgentDir).toHaveBeenCalledTimes(1);
-    expect(defaultResourceLoaderCtor).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: "/tmp/worktree",
-      agentDir: "/mock/agent-dir",
-    }));
+    expect(defaultResourceLoaderCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/worktree",
+        agentDir: "/mock/agent-dir",
+      }),
+    );
     expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir");
     // Same claim as before `rememberAgents` flipped the default — the effective
     // cwd reaches the session manager — now via the persistent constructor.
     expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp/worktree", undefined, expect.anything());
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: "/tmp/worktree",
-      agentDir: "/mock/agent-dir",
-    }));
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/worktree",
+        agentDir: "/mock/agent-dir",
+      }),
+    );
   });
 
   it("forwards worktreeBase to the prompt builder, and omits it otherwise", async () => {
@@ -310,10 +312,12 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(context, "Explore", "Say AUTHENTICATED", { pi });
 
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      modelRegistry: context.modelRegistry,
-      modelRuntime,
-    }));
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRegistry: context.modelRegistry,
+        modelRuntime,
+      }),
+    );
   });
 
   it("omits modelRuntime when the legacy registry does not expose one", async () => {
@@ -503,9 +507,11 @@ describe("agent-runner failed-final-turn detection (#144)", () => {
 
   it("resume that produces partial text before failing returns only THIS resume's text", async () => {
     const { session } = createSession("");
-    session.messages.push(
-      { role: "assistant", content: [{ type: "text", text: "PREVIOUS ANSWER" }], stopReason: "stop" },
-    );
+    session.messages.push({
+      role: "assistant",
+      content: [{ type: "text", text: "PREVIOUS ANSWER" }],
+      stopReason: "stop",
+    });
     session.prompt = vi.fn(async () => {
       session.messages.push(
         { role: "assistant", content: [{ type: "text", text: "new partial" }] },
@@ -567,7 +573,7 @@ describe("agent-runner usage callback wiring", () => {
     });
 
     // cacheRead rides along even though the display total drops it (#38): the
- // prefix is genuinely re-billed per call, and the parent-session report needs it.
+    // prefix is genuinely re-billed per call, and the parent-session report needs it.
     expect(seen).toEqual([
       { input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: 0.002 },
       { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: 0.004 },
@@ -632,19 +638,21 @@ describe("agent-runner usage callback wiring", () => {
     const seen: any[] = [];
     session.prompt = vi.fn(async () => {
       // Successful compaction — should fire
-      for (const l of listeners) l({
-        type: "compaction_end",
-        aborted: false,
-        reason: "threshold",
-        result: { tokensBefore: 12345 },
-      });
+      for (const l of listeners)
+        l({
+          type: "compaction_end",
+          aborted: false,
+          reason: "threshold",
+          result: { tokensBefore: 12345 },
+        });
       // Aborted compaction — should NOT fire
-      for (const l of listeners) l({
-        type: "compaction_end",
-        aborted: true,
-        reason: "manual",
-        result: { tokensBefore: 99999 },
-      });
+      for (const l of listeners)
+        l({
+          type: "compaction_end",
+          aborted: true,
+          reason: "manual",
+          result: { tokensBefore: 99999 },
+        });
       session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
     });
 
@@ -680,9 +688,7 @@ describe("getAgentConversation", () => {
   });
 
   it("accepts user content as content-blocks (not just strings)", () => {
-    const out = getAgentConversation(
-      fakeSession([{ role: "user", content: [{ type: "text", text: "from blocks" }] }]),
-    );
+    const out = getAgentConversation(fakeSession([{ role: "user", content: [{ type: "text", text: "from blocks" }] }]));
     expect(out).toBe("[User]: from blocks");
   });
 
@@ -747,11 +753,7 @@ describe("getAgentConversation", () => {
 //     so late arrivals are judged too.
 // `lastToolsPassed()` returns what the LLM can actually call under either shape.
 
-import {
-  getAgentConfig,
-  getConfig,
-  getToolNamesForType,
-} from "../src/agent-types.js";
+import { getAgentConfig, getConfig, getToolNamesForType } from "../src/agent-types.js";
 import { createNestedSubagentTools } from "../src/nested-tools.js";
 
 const BUILTINS_7 = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -810,11 +812,7 @@ function mockRegistry(opts: Record<string, any>): string[] {
   const customNames: string[] = (opts.customTools ?? []).map((t: any) => t.name);
   const all: string[] = opts.tools
     ? [...opts.tools, ...customNames]
-    : [
-        ...BUILTINS_7,
-        ...loaderExtensionsRef.current.extensions.flatMap((e) => [...e.tools.keys()]),
-        ...customNames,
-      ];
+    : [...BUILTINS_7, ...loaderExtensionsRef.current.extensions.flatMap((e) => [...e.tools.keys()]), ...customNames];
   return [...new Set(all)].filter((t) => !excluded.has(t));
 }
 
@@ -850,9 +848,11 @@ describe("agent-runner session persistence", () => {
 
     expect(sessionManagerInMemory).not.toHaveBeenCalled();
     expect(sessionManagerCreate).toHaveBeenCalled();
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      sessionManager: { kind: "persistent-session-manager" },
-    }));
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionManager: { kind: "persistent-session-manager" },
+      }),
+    );
   });
 
   it("keeps the session in memory when rememberAgents is off", async () => {
@@ -933,14 +933,14 @@ describe("agent-runner session persistence", () => {
     await runAgent(ctx, "Explore", "go", { pi });
 
     expect(sessionManagerInMemory).not.toHaveBeenCalled();
-    expect(sessionManagerCreate).toHaveBeenCalledWith(
-      "/tmp",
-      "/normal/pi/sessions",
-      { parentSession: "/sessions/parent.jsonl" },
+    expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp", "/normal/pi/sessions", {
+      parentSession: "/sessions/parent.jsonl",
+    });
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionManager: { kind: "persistent-session-manager" },
+      }),
     );
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      sessionManager: { kind: "persistent-session-manager" },
-    }));
   });
 
   it("uses a frontmatter sessionDir when persistSession is true and sessionDir is configured", async () => {
@@ -953,11 +953,9 @@ describe("agent-runner session persistence", () => {
 
     await runAgent(ctx, "Explore", "go", { pi, cwd: "/repo" });
 
-    expect(sessionManagerCreate).toHaveBeenCalledWith(
-      "/repo",
-      "/repo/.seams/pi-sessions/seam-plan-reviewer",
-      { parentSession: "/sessions/parent.jsonl" },
-    );
+    expect(sessionManagerCreate).toHaveBeenCalledWith("/repo", "/repo/.seams/pi-sessions/seam-plan-reviewer", {
+      parentSession: "/sessions/parent.jsonl",
+    });
   });
 });
 
@@ -1051,9 +1049,7 @@ describe("agent-runner master tool allowlist", () => {
 
   it("injects scoped nested tools for an opted-in non-isolated agent", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: false, allowedSubagents: ["scout"] }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false, allowedSubagents: ["scout"] }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -1064,17 +1060,17 @@ describe("agent-runner master tool allowlist", () => {
       nestedRuntime: { manager, parentAgentId: "parent", depth: 1, maxSubagentDepth: 3 },
     });
 
-    expect(createNestedSubagentTools).toHaveBeenCalledWith(expect.objectContaining({
-      manager,
-      parentAgentId: "parent",
-      depth: 1,
-      maxSubagentDepth: 3,
-      allowedSubagents: ["scout"],
-      configCwd: "/tmp",
-    }));
-    expect(lastToolsPassed()).toEqual(expect.arrayContaining([
-      "Agent", "get_subagent_result", "steer_subagent",
-    ]));
+    expect(createNestedSubagentTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manager,
+        parentAgentId: "parent",
+        depth: 1,
+        maxSubagentDepth: 3,
+        allowedSubagents: ["scout"],
+        configCwd: "/tmp",
+      }),
+    );
+    expect(lastToolsPassed()).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent"]));
     expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(3);
   });
 
@@ -1083,9 +1079,7 @@ describe("agent-runner master tool allowlist", () => {
     // they must (a) not be excluded from the registry, and (b) survive the live
     // installExtensionToolScope renarrow that strips EXCLUDED_TOOL_NAMES.
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: true, allowedSubagents: "all" }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true, allowedSubagents: "all" }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     withExtensions({ "/ext/ok.ts": ["ok_ext"] });
     const { session } = createSession("OK");
@@ -1170,13 +1164,13 @@ describe("agent-runner master tool allowlist", () => {
         nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
       });
 
-      await expect(
-        session.agent.beforeToolCall?.({ toolCall: { name: "Agent" } }),
-      ).resolves.toMatchObject({ block: true });
+      await expect(session.agent.beforeToolCall?.({ toolCall: { name: "Agent" } })).resolves.toMatchObject({
+        block: true,
+      });
       // ...while a nested tool that was NOT denied still passes the same gate.
-      await expect(
-        session.agent.beforeToolCall?.({ toolCall: { name: "steer_subagent" } }),
-      ).resolves.not.toMatchObject({ block: true });
+      await expect(session.agent.beforeToolCall?.({ toolCall: { name: "steer_subagent" } })).resolves.not.toMatchObject(
+        { block: true },
+      );
     });
 
     it("a partial denial does not take down the whole nested set", async () => {
@@ -1225,9 +1219,7 @@ describe("agent-runner master tool allowlist", () => {
 
   it("suppresses nested tools in isolated mode even when opted in", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: false, allowedSubagents: "all" }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false, allowedSubagents: "all" }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -1248,9 +1240,7 @@ describe("agent-runner master tool allowlist", () => {
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
 
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: false, allowedSubagents: "all" }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false, allowedSubagents: "all" }));
     await runAgent(ctx, "Explore", "go", {
       pi,
       nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1, maxSubagentDepth: 3 },
@@ -1262,9 +1252,7 @@ describe("agent-runner master tool allowlist", () => {
     // At the cap the agent can never spawn — and so can never own a child to
     // fetch from or steer. Three always-erroring tools would just cost context.
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: false, allowedSubagents: "all" }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false, allowedSubagents: "all" }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -1280,9 +1268,7 @@ describe("agent-runner master tool allowlist", () => {
 
   it("extensions: false with disallowedTools — denylist applies to built-ins", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: false, disallowedTools: ["bash"] }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false, disallowedTools: ["bash"] }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -1296,9 +1282,7 @@ describe("agent-runner master tool allowlist", () => {
 
   it("dynamic mode: leaves the allowlist unset, denies via excludeTools, activates post-bind", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: true, disallowedTools: ["bash"] }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true, disallowedTools: ["bash"] }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     withExtensions({ "/ext/mcp.ts": ["mcp"] });
     const { session } = createSession("OK");
@@ -1310,9 +1294,7 @@ describe("agent-runner master tool allowlist", () => {
     // scope is a denylist of this extension's own tools plus `disallowedTools`.
     const opts = createAgentSession.mock.calls[0][0];
     expect(opts.tools).toBeUndefined();
-    expect(new Set(opts.excludeTools)).toEqual(
-      new Set([...Object.values(SUBAGENT_TOOL_NAMES), "bash"]),
-    );
+    expect(new Set(opts.excludeTools)).toEqual(new Set([...Object.values(SUBAGENT_TOOL_NAMES), "bash"]));
 
     // The active set is repaired AFTER bindExtensions (tools may register during
     // session_start), activating the full allowed registry — the extension tool
@@ -1342,9 +1324,7 @@ describe("agent-runner async extension tool registration", () => {
 
   function setup(o: { builtinToolNames?: string[]; extSelectors?: string[] } = {}) {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: true, extSelectors: o.extSelectors }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true, extSelectors: o.extSelectors }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(o.builtinToolNames ?? ["read"]);
   }
 
@@ -1427,12 +1407,10 @@ describe("agent-runner async extension tool registration", () => {
 
     await runAgent(ctx, "Explore", "go", { pi });
 
-    await expect(
-      session.agent.beforeToolCall?.({ toolCall: { name: "bar_tool" } }),
-    ).resolves.toMatchObject({ block: true });
-    await expect(
-      session.agent.beforeToolCall?.({ toolCall: { name: "foo_tool" } }),
-    ).resolves.toBeUndefined();
+    await expect(session.agent.beforeToolCall?.({ toolCall: { name: "bar_tool" } })).resolves.toMatchObject({
+      block: true,
+    });
+    await expect(session.agent.beforeToolCall?.({ toolCall: { name: "foo_tool" } })).resolves.toBeUndefined();
   });
 
   it("beforeToolCall preserves a hook pi installed before us", async () => {
@@ -1466,9 +1444,9 @@ describe("agent-runner async extension tool registration", () => {
 
     expect(session.getActiveToolNames()).toContain("foo_late");
     expect(session.getActiveToolNames()).not.toContain("bar_late");
-    await expect(
-      session.agent.beforeToolCall?.({ toolCall: { name: "bar_late" } }),
-    ).resolves.toMatchObject({ block: true });
+    await expect(session.agent.beforeToolCall?.({ toolCall: { name: "bar_late" } })).resolves.toMatchObject({
+      block: true,
+    });
   });
 
   it("isolated keeps the static allowlist — no live scoping installed", async () => {
@@ -1737,9 +1715,7 @@ describe("agent-runner extension allowlist", () => {
 
   it("disallowedTools still applies to tools from an allowlisted extension", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: ["mcp"] }));
-    vi.mocked(getAgentConfig).mockReturnValueOnce(
-      makeAgentConfig({ extensions: ["mcp"], disallowedTools: ["mcp"] }),
-    );
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: ["mcp"], disallowedTools: ["mcp"] }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     withExtensions({ "/ext/mcp.ts": ["mcp", "mcp_call"] });
     const { session } = createSession("OK");
@@ -1797,8 +1773,8 @@ describe("agent-runner extension allowlist", () => {
     await runAgent(ctx, "Explore", "go", { pi, onToolActivity });
 
     // No extension-error warning — the name resolved.
-    const errorCalls = onToolActivity.mock.calls.filter((c) =>
-      typeof c[0]?.toolName === "string" && c[0].toolName.startsWith("extension-error:"),
+    const errorCalls = onToolActivity.mock.calls.filter(
+      (c) => typeof c[0]?.toolName === "string" && c[0].toolName.startsWith("extension-error:"),
     );
     expect(errorCalls).toEqual([]);
     expect(lastToolsPassed()).toContain("mcp_tool");
@@ -1870,7 +1846,7 @@ describe("agent-runner exclude_extensions", () => {
     expect(tools).toContain("mcp_tool");
     expect(tools).not.toContain("other_tool");
     expect(extensionErrors(onToolActivity)).toEqual([
-      expect.stringContaining('in both extensions: and exclude_extensions:'),
+      expect.stringContaining("in both extensions: and exclude_extensions:"),
     ]);
   });
 
@@ -1884,9 +1860,7 @@ describe("agent-runner exclude_extensions", () => {
     await runAgent(ctx, "Explore", "go", { pi, onToolActivity });
 
     expect(lastToolsPassed()).toContain("mcp_tool");
-    expect(extensionErrors(onToolActivity)).toEqual([
-      expect.stringContaining('exclude_extensions: "nope"'),
-    ]);
+    expect(extensionErrors(onToolActivity)).toEqual([expect.stringContaining('exclude_extensions: "nope"')]);
   });
 
   it("extensions: false + exclude — orphan warning, no override", async () => {
@@ -1898,9 +1872,7 @@ describe("agent-runner exclude_extensions", () => {
     await runAgent(ctx, "Explore", "go", { pi, onToolActivity });
 
     expect(lastLoaderOpts().extensionsOverride).toBeUndefined();
-    expect(extensionErrors(onToolActivity)).toEqual([
-      expect.stringContaining("exclude_extensions has no effect"),
-    ]);
+    expect(extensionErrors(onToolActivity)).toEqual([expect.stringContaining("exclude_extensions has no effect")]);
   });
 
   it("isolated: true + exclude — excludes nulled, no warnings", async () => {
@@ -1933,9 +1905,7 @@ describe("agent-runner exclude_extensions", () => {
     await runAgent(ctx, "Explore", "go", { pi, onToolActivity });
 
     expect(lastToolsPassed()).not.toContain("beta_tool");
-    expect(extensionErrors(onToolActivity)).toEqual([
-      expect.stringContaining("extension-error:ext:beta"),
-    ]);
+    expect(extensionErrors(onToolActivity)).toEqual([expect.stringContaining("extension-error:ext:beta")]);
   });
 
   it("exclude matches case-insensitively", async () => {
@@ -2007,18 +1977,14 @@ describe("parseExtSelectors", () => {
     expect(narrowing.get("foo")).toEqual(new Set(["bar"]));
   });
   it("multiple ext:foo/* entries union", () => {
-    expect(parseExtSelectors(["ext:foo/a", "ext:foo/b"]).narrowing.get("foo")).toEqual(
-      new Set(["a", "b"]),
-    );
+    expect(parseExtSelectors(["ext:foo/a", "ext:foo/b"]).narrowing.get("foo")).toEqual(new Set(["a", "b"]));
   });
   it("ext:foo + ext:foo/bar → narrowing wins", () => {
     const { narrowing } = parseExtSelectors(["ext:foo", "ext:foo/bar"]);
     expect(narrowing.get("foo")).toEqual(new Set(["bar"]));
   });
   it("splits on the first / so tool names may contain /", () => {
-    expect(parseExtSelectors(["ext:foo/bar/baz"]).narrowing.get("foo")).toEqual(
-      new Set(["bar/baz"]),
-    );
+    expect(parseExtSelectors(["ext:foo/bar/baz"]).narrowing.get("foo")).toEqual(new Set(["bar/baz"]));
   });
   it("skips empty name and empty tool halves", () => {
     const { extNames, narrowing } = parseExtSelectors(["ext:", "ext:foo/"]);
@@ -2114,7 +2080,7 @@ describe("agent-runner ext: tool selectors", () => {
     expect(tools).not.toContain("foo_tool");
     expect(onToolActivity).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolName: expect.stringContaining('extension-error:ext:foo'),
+        toolName: expect.stringContaining("extension-error:ext:foo"),
       }),
     );
   });
@@ -2133,10 +2099,10 @@ describe("agent-runner ext: tool selectors", () => {
 
     const tools = lastToolsPassed();
     expect(tools).not.toContain("foo_tool"); // foo never loaded
-    expect(tools).not.toContain("a_tool");   // a loaded but muted by the ext: opt-in flip
+    expect(tools).not.toContain("a_tool"); // a loaded but muted by the ext: opt-in flip
     expect(onToolActivity).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolName: expect.stringContaining('extension-error:ext:foo'),
+        toolName: expect.stringContaining("extension-error:ext:foo"),
       }),
     );
   });
@@ -2168,7 +2134,7 @@ describe("agent-runner ext: tool selectors", () => {
     expect(result.responseText).toBe("OK");
     expect(onToolActivity).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolName: expect.stringContaining('extension-error:ext:ghost'),
+        toolName: expect.stringContaining("extension-error:ext:ghost"),
       }),
     );
   });
@@ -2408,7 +2374,7 @@ describe("agent-runner turn limits", () => {
   it("reports each turn to the caller's counter", async () => {
     const onTurnEnd = vi.fn();
     await runWithTurns(3, { maxTurns: 10, onTurnEnd });
-    expect(onTurnEnd.mock.calls.map(c => c[0])).toEqual([1, 2, 3]);
+    expect(onTurnEnd.mock.calls.map((c) => c[0])).toEqual([1, 2, 3]);
   });
 });
 
@@ -2483,8 +2449,10 @@ describe("resolveDefaultModel", () => {
 
   it("returns the configured model when the registry has it available", () => {
     const r = registry([haiku]);
-    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5"))
-      .toEqual({ provider: "anthropic", id: "claude-haiku-4-5" });
+    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5")).toEqual({
+      provider: "anthropic",
+      id: "claude-haiku-4-5",
+    });
   });
 
   it("falls back to the parent when the model is NOT in the available set", () => {
@@ -2498,8 +2466,10 @@ describe("resolveDefaultModel", () => {
   it("trusts `find` when the registry cannot enumerate availability", () => {
     // getAvailable absent → no filtering possible, so a found model is used.
     const r = registry(undefined);
-    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5"))
-      .toEqual({ provider: "anthropic", id: "claude-haiku-4-5" });
+    expect(resolveDefaultModel(parent, r, "anthropic/claude-haiku-4-5")).toEqual({
+      provider: "anthropic",
+      id: "claude-haiku-4-5",
+    });
   });
 
   it("falls back to the parent when the registry cannot find the model", () => {

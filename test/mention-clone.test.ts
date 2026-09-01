@@ -117,18 +117,20 @@ function cloneSession(turn?: (tool: any) => Promise<void> | void) {
 }
 
 /** What the model does when it plays along: one Agent call. */
-const callsAgent = (params: Record<string, unknown> = { subagent_type: "Explore", prompt: "go" }) =>
+const callsAgent =
+  (params: Record<string, unknown> = { subagent_type: "Explore", prompt: "go" }) =>
   async (tool: any) => {
     await tool.execute("clone-tool-call-1", params, undefined, undefined, { cwd: "/fork" });
   };
 
-const opts = (over: Record<string, unknown> = {}) => ({
-  ctx: mainCtx(),
-  type: "Explore",
-  message: "find the flaky test",
-  agentTool: agentTool(),
-  ...over,
-}) as any;
+const opts = (over: Record<string, unknown> = {}) =>
+  ({
+    ctx: mainCtx(),
+    type: "Explore",
+    message: "find the flaky test",
+    agentTool: agentTool(),
+    ...over,
+  }) as any;
 
 describe("cloning the conversation", () => {
   it("carries the conversation's own messages, not a rendering of them", async () => {
@@ -252,9 +254,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(opts());
 
-    expect(session.prompt).toHaveBeenCalledWith(
-      `find the flaky test\n\n${agentMentionReminder("Explore")}`,
-    );
+    expect(session.prompt).toHaveBeenCalledWith(`find the flaky test\n\n${agentMentionReminder("Explore")}`);
   });
 });
 

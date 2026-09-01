@@ -80,8 +80,8 @@ describe("showSchedulesMenu", () => {
 
     await showSchedulesMenu(ctx, scheduler);
 
-    expect(scheduler.list().map(j => j.id)).toEqual([a.id]);
-    expect(scheduler.list().map(j => j.id)).not.toContain(b.id);
+    expect(scheduler.list().map((j) => j.id)).toEqual([a.id]);
+    expect(scheduler.list().map((j) => j.id)).not.toContain(b.id);
   });
 
   // Names are truncated to 18 chars for column alignment, and they come from the
@@ -110,8 +110,8 @@ describe("showSchedulesMenu", () => {
 
       await showSchedulesMenu(ctx, scheduler);
 
-      expect(scheduler.list().map(j => j.id)).toEqual([first.id]);
-      expect(scheduler.list().map(j => j.id)).not.toContain(second.id);
+      expect(scheduler.list().map((j) => j.id)).toEqual([first.id]);
+      expect(scheduler.list().map((j) => j.id)).not.toContain(second.id);
     });
 
     it("cancels the first job when the first row is picked", async () => {
@@ -123,8 +123,8 @@ describe("showSchedulesMenu", () => {
 
       await showSchedulesMenu(ctx, scheduler);
 
-      expect(scheduler.list().map(j => j.id)).toEqual([second.id]);
-      expect(scheduler.list().map(j => j.id)).not.toContain(first.id);
+      expect(scheduler.list().map((j) => j.id)).toEqual([second.id]);
+      expect(scheduler.list().map((j) => j.id)).not.toContain(first.id);
     });
 
     it("shows the SELECTED job's untruncated details in the confirm dialog", async () => {
@@ -148,7 +148,7 @@ describe("showSchedulesMenu", () => {
 
       await showSchedulesMenu(ctx, scheduler);
 
-      const surviving = scheduler.list().map(j => j.id);
+      const surviving = scheduler.list().map((j) => j.id);
       expect(surviving).toHaveLength(10);
       expect(surviving).not.toContain(jobs[10].id);
     });

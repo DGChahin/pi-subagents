@@ -61,10 +61,7 @@ const send = (lifecycle: Map<string, any>, text: string) =>
 describe("an agent started by a mention", () => {
   it("relays its answer through the ordinary completion notification (direct mode)", async () => {
     const { pi, lifecycle } = boot({ agentMentions: "direct" });
-    await lifecycle.get("session_start")(
-      { type: "session_start" },
-      ctx({ isIdle: vi.fn(() => true) }),
-    );
+    await lifecycle.get("session_start")({ type: "session_start" }, ctx({ isIdle: vi.fn(() => true) }));
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "found four planted bugs",
       session: fakeSession(),
@@ -74,7 +71,7 @@ describe("an agent started by a mention", () => {
     } as any);
 
     await send(lifecycle, "@Explore find the planted bugs in src/");
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500));
 
     expect(pi.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -90,10 +87,7 @@ describe("an agent started by a mention", () => {
     // What the user hits today: the clone reports it could not start the agent,
     // index.ts starts it directly, and the answer still has to come back.
     const { pi, lifecycle } = boot();
-    await lifecycle.get("session_start")(
-      { type: "session_start" },
-      ctx({ isIdle: vi.fn(() => true) }),
-    );
+    await lifecycle.get("session_start")({ type: "session_start" }, ctx({ isIdle: vi.fn(() => true) }));
     vi.mocked(runMentionClone).mockResolvedValue({ spawned: false, error: "the conversation clone did not start it" });
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "cyan, obviously",
@@ -104,7 +98,7 @@ describe("an agent started by a mention", () => {
     } as any);
 
     await send(lifecycle, "@Explore whats your favorite color");
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500));
 
     expect(pi.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({

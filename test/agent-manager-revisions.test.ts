@@ -42,7 +42,7 @@ function session(messages: unknown[] = []) {
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 };
 
 describe("AgentManager revision lifecycle", () => {
@@ -69,13 +69,23 @@ describe("AgentManager revision lifecycle", () => {
     vi.mocked(runAgent)
       .mockImplementationOnce((_ctx, _type, _prompt, options) => {
         initialCallbacks = options;
-        return new Promise(resolve => { resolveInitial = resolve; }) as never;
+        return new Promise((resolve) => {
+          resolveInitial = resolve;
+        }) as never;
       })
-      .mockImplementationOnce(() => new Promise(resolve => { resolveBlocker = resolve; }) as never);
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveBlocker = resolve;
+          }) as never,
+      );
 
     let releaseCheckpoint: ((value: unknown) => void) | undefined;
     vi.mocked(checkpointWorktree).mockImplementationOnce(
-      () => new Promise(resolve => { releaseCheckpoint = resolve; }) as never,
+      () =>
+        new Promise((resolve) => {
+          releaseCheckpoint = resolve;
+        }) as never,
     );
     vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed" });
 
@@ -119,12 +129,14 @@ describe("AgentManager revision lifecycle", () => {
 
     generation = 2;
     expect(manager.resumeInBackground(id, "continue")).toBe(record);
-    expect(record).toEqual(expect.objectContaining({
-      runRevision: 2,
-      status: "queued",
-      parentSessionGeneration: 2,
-      worktree: expect.objectContaining({ path: worktree.path }),
-    }));
+    expect(record).toEqual(
+      expect.objectContaining({
+        runRevision: 2,
+        status: "queued",
+        parentSessionGeneration: 2,
+        worktree: expect.objectContaining({ path: worktree.path }),
+      }),
+    );
     expect(resumeAgent).not.toHaveBeenCalled();
 
     initialCallbacks?.onToolActivity?.({ type: "end", toolName: "old-tool" });
@@ -148,7 +160,7 @@ describe("AgentManager revision lifecycle", () => {
     await flush();
     expect(record.settledRevision).toBe(2);
     expect(record.worktree?.path).toBe(worktree.path);
-    expect(vi.mocked(checkpointWorktree).mock.calls.map(call => call[0].path)).toEqual([
+    expect(vi.mocked(checkpointWorktree).mock.calls.map((call) => call[0].path)).toEqual([
       worktree.path,
       worktree.path,
     ]);
@@ -167,7 +179,9 @@ describe("AgentManager revision lifecycle", () => {
         messages,
         subscribe: vi.fn((fn: (event: { type: string }) => void) => {
           listener = fn;
-          return () => { listener = undefined; };
+          return () => {
+            listener = undefined;
+          };
         }),
         dispose: vi.fn(),
         steer: vi.fn(() => Promise.resolve()),
@@ -209,8 +223,8 @@ describe("AgentManager revision lifecycle", () => {
       const entries = readFileSync(outputPath, "utf-8")
         .trim()
         .split("\n")
-        .map(line => JSON.parse(line) as { message: { role: string; content: unknown } });
-      expect(entries.map(entry => entry.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+        .map((line) => JSON.parse(line) as { message: { role: string; content: unknown } });
+      expect(entries.map((entry) => entry.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
       expect(entries[2].message.content).toBe("continue");
       expect(JSON.stringify(entries[3].message.content)).toContain("resumed result");
     } finally {
@@ -226,15 +240,22 @@ describe("AgentManager revision lifecycle", () => {
 
     vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, options) => {
       if (prompt === "parent") {
-        return new Promise(resolve => { finishParent = resolve; }) as never;
+        return new Promise((resolve) => {
+          finishParent = resolve;
+        }) as never;
       }
-      return new Promise(resolve => {
-        options.signal?.addEventListener("abort", () => resolve({
-          responseText: "",
-          session: childSession,
-          aborted: true,
-          steered: false,
-        }), { once: true });
+      return new Promise((resolve) => {
+        options.signal?.addEventListener(
+          "abort",
+          () =>
+            resolve({
+              responseText: "",
+              session: childSession,
+              aborted: true,
+              steered: false,
+            }),
+          { once: true },
+        );
       }) as never;
     });
 
@@ -265,44 +286,44 @@ describe("AgentManager revision lifecycle", () => {
     expect(order).toEqual(["child", "parent"]);
   });
 
-  it.each(["checkpoint", "removal"] as const)(
-    "retains the record and isolated path after %s failure",
-    async (failurePoint) => {
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      const failure = {
-        status: "failed" as const,
-        path: worktree.path,
-        error: `${failurePoint} failed`,
-      };
-      if (failurePoint === "checkpoint") {
-        vi.mocked(checkpointWorktree).mockReturnValue(failure);
-      } else {
-        vi.mocked(cleanupWorktree).mockReturnValue(failure);
-      }
-      vi.mocked(runAgent).mockResolvedValue({
-        responseText: "recoverable work",
-        session: session(),
-        aborted: false,
-        steered: false,
-      });
+  it.each([
+    "checkpoint",
+    "removal",
+  ] as const)("retains the record and isolated path after %s failure", async (failurePoint) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failure = {
+      status: "failed" as const,
+      path: worktree.path,
+      error: `${failurePoint} failed`,
+    };
+    if (failurePoint === "checkpoint") {
+      vi.mocked(checkpointWorktree).mockReturnValue(failure);
+    } else {
+      vi.mocked(cleanupWorktree).mockReturnValue(failure);
+    }
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "recoverable work",
+      session: session(),
+      aborted: false,
+      steered: false,
+    });
 
-      manager = new AgentManager();
-      const id = manager.spawn(pi, ctx, "general-purpose", "work", {
-        description: "recoverable",
-        isBackground: true,
-        isolation: "worktree",
-      });
-      const record = manager.getRecord(id)!;
-      await record.promise;
-      await flush();
-      record.resultConsumed = true;
-      manager.clearCompleted();
+    manager = new AgentManager();
+    const id = manager.spawn(pi, ctx, "general-purpose", "work", {
+      description: "recoverable",
+      isBackground: true,
+      isolation: "worktree",
+    });
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    await flush();
+    record.resultConsumed = true;
+    manager.clearCompleted();
 
-      expect(manager.getRecord(id)).toBe(record);
-      expect(record.worktree?.path).toBe(worktree.path);
-      expect(record.worktreeResult).toEqual(failure);
-      expect(record.result).toContain(worktree.path);
-      expect(record.result).toContain(`${failurePoint} failed`);
-    },
-  );
+    expect(manager.getRecord(id)).toBe(record);
+    expect(record.worktree?.path).toBe(worktree.path);
+    expect(record.worktreeResult).toEqual(failure);
+    expect(record.result).toContain(worktree.path);
+    expect(record.result).toContain(`${failurePoint} failed`);
+  });
 });

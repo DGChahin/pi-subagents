@@ -23,7 +23,11 @@ describe("usage", () => {
 
     it("returns 0 when session is undefined or stats throw", () => {
       expect(getSessionTokens(undefined)).toBe(0);
-      const broken = { getSessionStats: () => { throw new Error("nope"); } } as any;
+      const broken = {
+        getSessionStats: () => {
+          throw new Error("nope");
+        },
+      } as any;
       expect(getSessionTokens(broken)).toBe(0);
     });
   });
@@ -80,15 +84,17 @@ describe("usage", () => {
       // Our accumulator is independent — it keeps growing.
       sessionStatsTokens = { input: 0, output: 0, cacheWrite: 0 };
 
-      expect(getSessionTokens(session)).toBe(0);            // reset
-      expect(getLifetimeTotal(lifetime)).toBe(350);          // preserved
+      expect(getSessionTokens(session)).toBe(0); // reset
+      expect(getLifetimeTotal(lifetime)).toBe(350); // preserved
 
       // Subsequent message_end events feed both: session re-fills, accumulator continues
       sessionStatsTokens = { input: 80, output: 150, cacheWrite: 30 };
-      lifetime.input += 80; lifetime.output += 150; lifetime.cacheWrite += 30;
+      lifetime.input += 80;
+      lifetime.output += 150;
+      lifetime.cacheWrite += 30;
 
-      expect(getSessionTokens(session)).toBe(260);           // post-compaction window
-      expect(getLifetimeTotal(lifetime)).toBe(610);          // 350 + 260, monotone
+      expect(getSessionTokens(session)).toBe(260); // post-compaction window
+      expect(getLifetimeTotal(lifetime)).toBe(610); // 350 + 260, monotone
     });
 
     // The accumulator survives compaction because it lives on AgentActivity /
@@ -124,7 +130,11 @@ describe("usage", () => {
       const usage = { input: 100, output: 20, cacheWrite: 5 };
       addUsage(usage, { input: 10, output: 4, cacheRead: 500, cacheWrite: 2, cost: 0.0123 });
       expect(usage).toEqual({
-        input: 110, output: 24, cacheWrite: 7, cacheRead: 500, cost: 0.0123,
+        input: 110,
+        output: 24,
+        cacheWrite: 7,
+        cacheRead: 500,
+        cost: 0.0123,
       });
       expect(getLifetimeTotal(usage)).toBe(141);
     });
@@ -144,8 +154,11 @@ describe("usage", () => {
     });
 
     it("records an explicitly reported zero cost", () => {
-      const usage: { input: number; output: number; cacheWrite: number; cost?: number } =
-        { input: 0, output: 0, cacheWrite: 0 };
+      const usage: { input: number; output: number; cacheWrite: number; cost?: number } = {
+        input: 0,
+        output: 0,
+        cacheWrite: 0,
+      };
       addUsage(usage, { input: 10, output: 5, cacheWrite: 0, cost: 0 });
 
       expect(usage.cost).toBe(0);
@@ -191,7 +204,11 @@ describe("usage", () => {
       pool.add({ input: 100, output: 50, cacheWrite: 10 });
 
       expect(pool.drain()).toEqual({
-        input: 100, output: 50, cacheRead: 0, cacheWrite: 10, totalTokens: 160,
+        input: 100,
+        output: 50,
+        cacheRead: 0,
+        cacheWrite: 10,
+        totalTokens: 160,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       });
     });

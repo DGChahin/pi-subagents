@@ -86,10 +86,9 @@ export interface Hermetic {
  * developer's real settings and agent files can't reach the extension under
  * test. Call BEFORE instantiating the extension — settings are read at boot.
  */
-export function hermeticDir(opts: {
-  settings?: Record<string, unknown>;
-  agentFiles?: Record<string, string>;
-} = {}): Hermetic {
+export function hermeticDir(
+  opts: { settings?: Record<string, unknown>; agentFiles?: Record<string, string> } = {},
+): Hermetic {
   const dir = mkdtempSync(join(tmpdir(), "pi-boot-"));
   const agentDir = mkdtempSync(join(tmpdir(), "pi-boot-agentdir-"));
   const prevCwd = process.cwd();

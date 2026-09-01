@@ -38,9 +38,9 @@ function userPrompt(ctx: Context): string {
     const content = (message as { content?: unknown }).content;
     if (typeof content === "string") return content;
     if (Array.isArray(content)) {
-      const text = content.find(
-        (block: { type?: string; text?: string }) => block.type === "text",
-      ) as { text?: string } | undefined;
+      const text = content.find((block: { type?: string; text?: string }) => block.type === "text") as
+        | { text?: string }
+        | undefined;
       if (text?.text) return text.text;
     }
   }
@@ -53,19 +53,14 @@ function tools(ctx: Context): string[] {
 
 function toolResults(ctx: Context, name: string): string[] {
   return ctx.messages.flatMap((message) => {
-    if (
-      message.role !== "toolResult" ||
-      (message as { toolName?: string }).toolName !== name
-    ) {
+    if (message.role !== "toolResult" || (message as { toolName?: string }).toolName !== name) {
       return [];
     }
     const content = (message as { content?: unknown }).content;
     if (!Array.isArray(content)) return [];
     return [
       content
-        .map((block: { type?: string; text?: string }) =>
-          block.type === "text" ? (block.text ?? "") : "",
-        )
+        .map((block: { type?: string; text?: string }) => (block.type === "text" ? (block.text ?? "") : ""))
         .join(""),
     ];
   });
@@ -75,22 +70,14 @@ function nestedToolsIn(toolNames: string[] | undefined): string[] {
   return (toolNames ?? []).filter((name) => NESTED_TOOLS.includes(name));
 }
 
-async function waitForChildReady(
-  ready: Promise<void>,
-  timeoutMs: number,
-): Promise<void> {
+async function waitForChildReady(ready: Promise<void>, timeoutMs: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       ready,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Nested child did not enter its deferred response within ${timeoutMs}ms`,
-              ),
-            ),
+          () => reject(new Error(`Nested child did not enter its deferred response within ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
@@ -105,11 +92,7 @@ function lastToolResult(ctx: Context, name: string): string {
   return results[results.length - 1] ?? "";
 }
 
-function toolCall(
-  name: string,
-  args: Record<string, unknown>,
-  id: string,
-): ToolCall {
+function toolCall(name: string, args: Record<string, unknown>, id: string): ToolCall {
   return { type: "toolCall", id, name, arguments: args } as ToolCall;
 }
 
@@ -117,10 +100,7 @@ function writeAgents(cwd: string, agents: Record<string, string>): void {
   const dir = join(cwd, ".pi", "agents");
   mkdirSync(dir, { recursive: true });
   for (const [name, frontmatter] of Object.entries(agents)) {
-    writeFileSync(
-      join(dir, `${name}.md`),
-      `---\ndescription: ${name}\n${frontmatter}---\n${name} agent\n`,
-    );
+    writeFileSync(join(dir, `${name}.md`), `---\ndescription: ${name}\n${frontmatter}---\n${name} agent\n`);
   }
 }
 
@@ -139,10 +119,7 @@ async function runWithAgents(
   writeAgents(cwd, agents);
   const { defaultJoinMode, ...runOptions } = options;
   if (defaultJoinMode) {
-    writeFileSync(
-      join(cwd, ".pi", "subagents.json"),
-      JSON.stringify({ defaultJoinMode }),
-    );
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ defaultJoinMode }));
   }
   const run = await runPrintMode({
     ...runOptions,
@@ -181,11 +158,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
         if (fetched.length > 0) return fetched.at(-1) ?? "";
         const taskId = completionTaskIds(ctx).at(-1);
         if (taskId) {
-          return toolCall(
-            "get_subagent_result",
-            { agent_id: taskId },
-            "get-plain-result",
-          );
+          return toolCall("get_subagent_result", { agent_id: taskId }, "get-plain-result");
         }
         return agentCall({
           subagent_type: "plain",
@@ -236,11 +209,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
         if (fetched.length > 0) return fetched.at(-1) ?? "";
         const taskId = completionTaskIds(ctx).at(-1);
         if (taskId) {
-          return toolCall(
-            "get_subagent_result",
-            { agent_id: taskId },
-            "get-depth-result",
-          );
+          return toolCall("get_subagent_result", { agent_id: taskId }, "get-depth-result");
         }
         return agentCall({
           subagent_type: "level_one",
@@ -252,9 +221,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
     ));
 
     expect(run.responseText).toContain("AT_CAP tools=none");
-    expect(observed.get("level_one-child")).toEqual(
-      expect.arrayContaining(NESTED_TOOLS),
-    );
+    expect(observed.get("level_one-child")).toEqual(expect.arrayContaining(NESTED_TOOLS));
     expect(nestedToolsIn(observed.get("level_two-child"))).toEqual([]);
     expect(observed.has("level_three-child")).toBe(false);
   });
@@ -288,11 +255,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
         if (fetched.length > 0) return fetched.at(-1) ?? "";
         const taskId = completionTaskIds(ctx).at(-1);
         if (taskId) {
-          return toolCall(
-            "get_subagent_result",
-            { agent_id: taskId },
-            "get-background-result",
-          );
+          return toolCall("get_subagent_result", { agent_id: taskId }, "get-background-result");
         }
         return agentCall({
           subagent_type: "background_delegator",
@@ -311,10 +274,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
       run.parentSession.messages.some(
         (message) =>
           message.role === "assistant" &&
-          message.content.some(
-            (block) =>
-              block.type === "toolCall" && block.name === "get_subagent_result",
-          ),
+          message.content.some((block) => block.type === "toolCall" && block.name === "get_subagent_result"),
       ),
     ).toBe(true);
   });
@@ -388,18 +348,10 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
             const gets = toolResults(ctx, "get_subagent_result");
             const steers = toolResults(ctx, "steer_subagent");
             if (gets.length === 0) {
-              return toolCall(
-                "get_subagent_result",
-                { agent_id: id },
-                "foreign-get",
-              );
+              return toolCall("get_subagent_result", { agent_id: id }, "foreign-get");
             }
             if (steers.length === 0) {
-              return toolCall(
-                "steer_subagent",
-                { agent_id: id, message: "foreign guidance" },
-                "foreign-steer",
-              );
+              return toolCall("steer_subagent", { agent_id: id, message: "foreign guidance" }, "foreign-steer");
             }
             probeResults.get = gets.at(-1);
             probeResults.steer = steers.at(-1);
@@ -409,11 +361,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
           if (results.length > 0) return results.at(-1) ?? "";
           const taskId = completionTaskIds(ctx).at(-1);
           if (taskId) {
-            return toolCall(
-              "get_subagent_result",
-              { agent_id: taskId },
-              "await-probe",
-            );
+            return toolCall("get_subagent_result", { agent_id: taskId }, "await-probe");
           }
 
           // Successful top-level dispatches terminate the parent, so owner and
@@ -464,12 +412,8 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
       expect(run.responseText).toContain("OWNERSHIP_PROBE_DONE");
       expect(probeResults.get).toBeDefined();
       expect(probeResults.steer).toBeDefined();
-      expect(probeResults.get).toMatch(
-        /^Nested agent not found or not owned by this parent:/i,
-      );
-      expect(probeResults.steer).toMatch(
-        /^Running nested agent not found or not owned by this parent:/i,
-      );
+      expect(probeResults.get).toMatch(/^Nested agent not found or not owned by this parent:/i);
+      expect(probeResults.steer).toMatch(/^Running nested agent not found or not owned by this parent:/i);
       expect(probeResults.get).not.toContain("OWNED_NESTED_RESULT");
       expect(probeResults.steer).not.toContain("Steering message sent");
 
@@ -481,10 +425,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
       releaseOwnedChild();
       releaseOwner();
       if (waitForAll) {
-        await Promise.race([
-          waitForAll,
-          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-        ]);
+        await Promise.race([waitForAll, new Promise<void>((resolve) => setTimeout(resolve, 5_000))]);
       }
     }
   });

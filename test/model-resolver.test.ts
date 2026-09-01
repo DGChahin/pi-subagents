@@ -13,7 +13,7 @@ const MODELS = [
 function makeRegistry(models = MODELS, available?: typeof MODELS): ModelRegistry {
   return {
     find(provider: string, modelId: string) {
-      return models.find(m => m.provider === provider && m.id === modelId);
+      return models.find((m) => m.provider === provider && m.id === modelId);
     },
     getAll() {
       return models;
@@ -134,7 +134,9 @@ describe("resolveModel", () => {
     });
 
     it("prefers the named provider when it has the model", () => {
-      expect(resolveModel("anthropic/claude-haiku-4-5", makeRegistry([gatewayHaiku, anthropicHaiku]))).toEqual(anthropicHaiku);
+      expect(resolveModel("anthropic/claude-haiku-4-5", makeRegistry([gatewayHaiku, anthropicHaiku]))).toEqual(
+        anthropicHaiku,
+      );
     });
 
     it("still errors when no provider has the model", () => {

@@ -25,7 +25,12 @@ function assistantMsg(blocks: unknown[]) {
 
 describe("extractText", () => {
   it("joins multiple text blocks with newlines", () => {
-    expect(extractText([{ type: "text", text: "a" }, { type: "text", text: "b" }])).toBe("a\nb");
+    expect(
+      extractText([
+        { type: "text", text: "a" },
+        { type: "text", text: "b" },
+      ]),
+    ).toBe("a\nb");
   });
 
   it("filters out non-text blocks (tool_use, etc.)", () => {
@@ -64,9 +69,7 @@ describe("buildParentContext", () => {
   });
 
   it("wraps a user+assistant exchange with the parent-context header and task footer", () => {
-    const out = buildParentContext(
-      makeCtx([userMsg("hello"), assistantMsg([{ type: "text", text: "hi back" }])]),
-    );
+    const out = buildParentContext(makeCtx([userMsg("hello"), assistantMsg([{ type: "text", text: "hi back" }])]));
     expect(out).toContain("# Parent Conversation Context");
     expect(out).toContain("[User]: hello");
     expect(out).toContain("[Assistant]: hi back");
@@ -88,10 +91,8 @@ describe("buildParentContext", () => {
         assistantMsg([{ type: "text", text: "follow-up" }]),
       ]),
     );
-    expect(out.indexOf("[User]: orig question"))
-      .toBeLessThan(out.indexOf("[Summary]: we discussed X"));
-    expect(out.indexOf("[Summary]: we discussed X"))
-      .toBeLessThan(out.indexOf("[Assistant]: follow-up"));
+    expect(out.indexOf("[User]: orig question")).toBeLessThan(out.indexOf("[Summary]: we discussed X"));
+    expect(out.indexOf("[Summary]: we discussed X")).toBeLessThan(out.indexOf("[Assistant]: follow-up"));
   });
 
   it("skips tool_result messages — they're too verbose for inherited context", () => {
@@ -108,9 +109,7 @@ describe("buildParentContext", () => {
   });
 
   it("trims and skips whitespace-only messages", () => {
-    const out = buildParentContext(
-      makeCtx([userMsg("   \n  "), assistantMsg([{ type: "text", text: "non-empty" }])]),
-    );
+    const out = buildParentContext(makeCtx([userMsg("   \n  "), assistantMsg([{ type: "text", text: "non-empty" }])]));
     expect(out).not.toMatch(/\[User\]:/);
     expect(out).toContain("[Assistant]: non-empty");
   });
@@ -118,10 +117,7 @@ describe("buildParentContext", () => {
   it("ignores assistant messages whose only content is non-text blocks", () => {
     // Assistant emitted only a tool_use — nothing extractable, so it shouldn't appear
     const out = buildParentContext(
-      makeCtx([
-        userMsg("question"),
-        assistantMsg([{ type: "tool_use", name: "x", input: {} }]),
-      ]),
+      makeCtx([userMsg("question"), assistantMsg([{ type: "tool_use", name: "x", input: {} }])]),
     );
     expect(out).toContain("[User]: question");
     expect(out).not.toContain("[Assistant]:");

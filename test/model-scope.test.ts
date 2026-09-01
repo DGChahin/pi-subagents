@@ -23,7 +23,12 @@ const MODELS = [
 ];
 
 function makeRegistry(models = MODELS): ModelRegistryRef {
-  return { getAll() { return models; }, getAvailable: undefined };
+  return {
+    getAll() {
+      return models;
+    },
+    getAvailable: undefined,
+  };
 }
 
 const HAIKU = { provider: "anthropic", id: "claude-haiku-4-5" };
@@ -119,8 +124,9 @@ describe("checkModelScope", () => {
     it("only warns for a frontmatter-pinned choice, so the spawn still proceeds", () => {
       const verdict = check({ callerSupplied: false, modelInput: "anthropic/claude-opus-4-6" });
       expect(verdict.kind).toBe("warn");
-      expect((verdict as { message: string }).message)
-        .toBe('Agent "scout" using out-of-scope model "anthropic/claude-opus-4-6"');
+      expect((verdict as { message: string }).message).toBe(
+        'Agent "scout" using out-of-scope model "anthropic/claude-opus-4-6"',
+      );
     });
 
     it("names the resolved model in the warning when there was no raw input", () => {

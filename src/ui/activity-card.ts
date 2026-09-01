@@ -8,7 +8,15 @@ import { describeActivity, formatCost, getDisplayName, type Theme, type UICtx } 
 export const ACTIVITY_ENTRY = "subagents:activity";
 export const ACTIVITY_FINAL_ENTRY = "subagents:activity-final";
 
-export type ActivityCardStatus = "queued" | "running" | "detached" | "completed" | "steered" | "aborted" | "stopped" | "error";
+export type ActivityCardStatus =
+  | "queued"
+  | "running"
+  | "detached"
+  | "completed"
+  | "steered"
+  | "aborted"
+  | "stopped"
+  | "error";
 /** Minimal record shape shared by subagents and the main context agent. */
 export interface ActivityCardRecord {
   id: string;
@@ -175,29 +183,34 @@ export class ActivityCardStore {
     const current = this.states.get(id);
     const contextPercent = record.contextPercent ?? this.readContextPercent(record);
     if (!current) {
-      this.states.set(id, stateFromData({
+      this.states.set(
         id,
-        type: record.type,
-        description: record.description,
-        startedAt: record.startedAt,
-        status: record.status,
-        toolUses: record.toolUses,
-        turnCount: 0,
-        maxTurns: invocation?.maxTurns,
-        modelName: invocation?.modelName,
-        displayName: record.displayName,
-        tags: invocation ? [
-          ...(invocation.thinking ? [`thinking: ${invocation.thinking}`] : []),
-          ...(invocation.isolated ? ["isolated"] : []),
-          ...(invocation.isolation === "worktree" ? ["worktree"] : []),
-        ] : undefined,
-        parentAgentId: record.parentAgentId,
-        completedAt: record.completedAt,
-        error: record.error,
-        compactionCount: record.compactionCount,
-        lifetimeUsage: copyUsage(record.lifetimeUsage),
-        ...(contextPercent !== null && contextPercent !== undefined ? { contextPercent } : {}),
-      }));
+        stateFromData({
+          id,
+          type: record.type,
+          description: record.description,
+          startedAt: record.startedAt,
+          status: record.status,
+          toolUses: record.toolUses,
+          turnCount: 0,
+          maxTurns: invocation?.maxTurns,
+          modelName: invocation?.modelName,
+          displayName: record.displayName,
+          tags: invocation
+            ? [
+                ...(invocation.thinking ? [`thinking: ${invocation.thinking}`] : []),
+                ...(invocation.isolated ? ["isolated"] : []),
+                ...(invocation.isolation === "worktree" ? ["worktree"] : []),
+              ]
+            : undefined,
+          parentAgentId: record.parentAgentId,
+          completedAt: record.completedAt,
+          error: record.error,
+          compactionCount: record.compactionCount,
+          lifetimeUsage: copyUsage(record.lifetimeUsage),
+          ...(contextPercent !== null && contextPercent !== undefined ? { contextPercent } : {}),
+        }),
+      );
     } else {
       current.status = record.status;
       current.startedAt = record.startedAt;
@@ -345,15 +358,24 @@ function statusIcon(state: ActivityCardState, theme: Theme): string {
 
 function statusLabel(state: ActivityCardState, theme: Theme): string {
   switch (state.status) {
-    case "queued": return theme.fg("muted", "queued");
-    case "running": return theme.fg("accent", "running");
-    case "detached": return theme.fg("dim", "detached");
-    case "steered": return theme.fg("warning", "wrapped up");
-    case "completed": return theme.fg("success", "completed");
-    case "stopped": return theme.fg("dim", "stopped");
-    case "aborted": return theme.fg("error", "aborted");
-    case "error": return theme.fg("error", "error");
-    default: return theme.fg("dim", state.status);
+    case "queued":
+      return theme.fg("muted", "queued");
+    case "running":
+      return theme.fg("accent", "running");
+    case "detached":
+      return theme.fg("dim", "detached");
+    case "steered":
+      return theme.fg("warning", "wrapped up");
+    case "completed":
+      return theme.fg("success", "completed");
+    case "stopped":
+      return theme.fg("dim", "stopped");
+    case "aborted":
+      return theme.fg("error", "aborted");
+    case "error":
+      return theme.fg("error", "error");
+    default:
+      return theme.fg("dim", state.status);
   }
 }
 
@@ -384,7 +406,7 @@ function renderCard(state: ActivityCardState, width: number, theme: Theme, showC
     `${theme.fg("dim", "│")}  ${theme.fg("dim", `⎿  ${activityText(state, width)}`)}`,
     theme.fg("dim", "╰─"),
   ];
-  return lines.map(line => truncateToWidth(line, width));
+  return lines.map((line) => truncateToWidth(line, width));
 }
 
 class ActivityCardComponent implements Component {
@@ -402,11 +424,7 @@ class ActivityCardComponent implements Component {
   invalidate(): void {}
 }
 
-export function createActivityCardComponent(
-  store: ActivityCardStore,
-  data: ActivityCardData,
-  theme: Theme,
-): Component {
+export function createActivityCardComponent(store: ActivityCardStore, data: ActivityCardData, theme: Theme): Component {
   store.hydrate(data);
   return new ActivityCardComponent(store, data.id, theme);
 }
@@ -425,11 +443,13 @@ export function toActivityCardData(record: ActivityCardRecord, turnCount = 0): A
     maxTurns: invocation?.maxTurns,
     modelName: invocation?.modelName,
     displayName: record.displayName,
-    tags: invocation ? [
-      ...(invocation.thinking ? [`thinking: ${invocation.thinking}`] : []),
-      ...(invocation.isolated ? ["isolated"] : []),
-      ...(invocation.isolation === "worktree" ? ["worktree"] : []),
-    ] : undefined,
+    tags: invocation
+      ? [
+          ...(invocation.thinking ? [`thinking: ${invocation.thinking}`] : []),
+          ...(invocation.isolated ? ["isolated"] : []),
+          ...(invocation.isolation === "worktree" ? ["worktree"] : []),
+        ]
+      : undefined,
     parentAgentId: record.parentAgentId,
     completedAt: record.completedAt,
     error: record.error,
@@ -478,10 +498,14 @@ export class ActivityCardTicker {
 
   private register(): void {
     if (!this.uiCtx || this.registered) return;
-    this.uiCtx.setWidget(this.key, (tui) => {
-      this.tui = tui;
-      return { render: () => [], invalidate: () => {} };
-    }, { placement: "aboveEditor" });
+    this.uiCtx.setWidget(
+      this.key,
+      (tui) => {
+        this.tui = tui;
+        return { render: () => [], invalidate: () => {} };
+      },
+      { placement: "aboveEditor" },
+    );
     this.registered = true;
   }
 

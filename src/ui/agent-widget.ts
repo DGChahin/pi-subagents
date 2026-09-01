@@ -83,7 +83,10 @@ export interface AgentDetails {
 export function fgPreservingNestedStyles(theme: Theme, color: string, text: string): string {
   const styledEmpty = theme.fg(color, "");
   const styleStart = styledEmpty.replace(/\u001b\[(?:0|39)m/g, "");
-  return theme.fg(color, text.replace(/\u001b\[(?:0|39)m/g, reset => `${reset}${styleStart}`));
+  return theme.fg(
+    color,
+    text.replace(/\u001b\[(?:0|39)m/g, (reset) => `${reset}${styleStart}`),
+  );
 }
 
 /** Format a token count compactly: "33.8k token", "1.2M token". */
@@ -107,7 +110,7 @@ export function formatTokens(count: number): string {
  * measured, and rounding it to `~$0.0000` would say the opposite.
  */
 export function formatCost(cost: number): string {
-  if (!(cost > 0)) return "";                     // also catches NaN
+  if (!(cost > 0)) return ""; // also catches NaN
   if (cost < 0.0001) return "<$0.0001";
   if (cost >= 1) return `~$${cost.toFixed(2)}`;
   // Under a dollar: cents at minimum, four decimals at most, nothing trailing.
@@ -128,12 +131,7 @@ export function formatCost(cost: number): string {
  *   "12.3k token (⇊2)"          — compactions only (e.g. right after compact)
  *   "12.3k token (45% · ⇊2)"    — both
  */
-export function formatSessionTokens(
-  tokens: number,
-  percent: number | null,
-  theme: Theme,
-  compactions = 0,
-): string {
+export function formatSessionTokens(tokens: number, percent: number | null, theme: Theme, compactions = 0): string {
   const tokenStr = formatTokens(tokens);
   const annot: string[] = [];
   if (percent !== null) {
@@ -175,9 +173,7 @@ export function getPromptModeLabel(type: SubagentType): string | undefined {
 }
 
 /** Mode label is not included — callers add it where they want it. */
-export function buildInvocationTags(
-  invocation: AgentInvocation | undefined,
-): { modelName?: string; tags: string[] } {
+export function buildInvocationTags(invocation: AgentInvocation | undefined): { modelName?: string; tags: string[] } {
   const tags: string[] = [];
   if (!invocation) return { tags };
   if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
@@ -191,7 +187,11 @@ export function buildInvocationTags(
 
 /** Truncate text to a single line, max `len` chars. */
 function truncateLine(text: string, len = 60): string {
-  const line = text.split("\n").find(l => l.trim())?.trim() ?? "";
+  const line =
+    text
+      .split("\n")
+      .find((l) => l.trim())
+      ?.trim() ?? "";
   if (line.length <= len) return line;
   return line.slice(0, len) + "…";
 }

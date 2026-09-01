@@ -133,7 +133,11 @@ describe("resolveAgentInvocationConfig", () => {
   });
 
   it("drops worktree isolation when the project disallows it", () => {
-    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), { isolation: "worktree" }, { worktreeAllowed: false });
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ isolation: "worktree" }),
+      { isolation: "worktree" },
+      { worktreeAllowed: false },
+    );
     expect(resolved.isolation).toBeUndefined();
   });
 

@@ -61,9 +61,9 @@ describe("renderAgentNameLabel", () => {
   });
 
   it("preserves existing theme styling without a valid color", () => {
-    expect(renderAgentNameLabel("Agent", undefined, theme, { fallbackColor: "toolTitle", bold: true }))
-      .toBe("<toolTitle>*Agent*</toolTitle>");
-    expect(renderAgentNameLabel("Agent", "invalid", theme, { fallbackColor: "muted" }))
-      .toBe("<muted>Agent</muted>");
+    expect(renderAgentNameLabel("Agent", undefined, theme, { fallbackColor: "toolTitle", bold: true })).toBe(
+      "<toolTitle>*Agent*</toolTitle>",
+    );
+    expect(renderAgentNameLabel("Agent", "invalid", theme, { fallbackColor: "muted" })).toBe("<muted>Agent</muted>");
   });
 });

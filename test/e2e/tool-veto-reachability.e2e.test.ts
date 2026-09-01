@@ -132,14 +132,15 @@ describe("tool veto reachability against real pi-mono", () => {
     expect(priorIsFunction).toBe(true);
 
     // Out of scope: beta loaded but the ext: flip did not select it.
-    await expect(
-      session.agent.beforeToolCall({ toolCall: { name: "beta_tool" }, args: {} }),
-    ).resolves.toMatchObject({ block: true, reason: expect.any(String) });
+    await expect(session.agent.beforeToolCall({ toolCall: { name: "beta_tool" }, args: {} })).resolves.toMatchObject({
+      block: true,
+      reason: expect.any(String),
+    });
 
     // In scope: must NOT be blocked. Reaching Pi's own prior hook without throwing
     // also proves the chain is intact (a clobbered/absent prior would surface here).
-    await expect(
-      session.agent.beforeToolCall({ toolCall: { name: "alpha_read" }, args: {} }),
-    ).resolves.toSatisfy((r: any) => !r?.block);
+    await expect(session.agent.beforeToolCall({ toolCall: { name: "alpha_read" }, args: {} })).resolves.toSatisfy(
+      (r: any) => !r?.block,
+    );
   });
 });

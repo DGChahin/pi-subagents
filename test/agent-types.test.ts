@@ -222,13 +222,18 @@ describe("agent type registry", () => {
     });
 
     it("getConfig returns config for user agents", () => {
-      const agents = new Map([["auditor", makeAgentConfig({
-        name: "auditor",
-        description: "Security auditor",
-        builtinToolNames: ["read", "grep"],
-        extensions: false,
-        skills: true,
-      })]]);
+      const agents = new Map([
+        [
+          "auditor",
+          makeAgentConfig({
+            name: "auditor",
+            description: "Security auditor",
+            builtinToolNames: ["read", "grep"],
+            extensions: false,
+            skills: true,
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       const config = getConfig("auditor");
@@ -240,11 +245,16 @@ describe("agent type registry", () => {
     });
 
     it("getConfig returns extension allowlist for user agents", () => {
-      const agents = new Map([["partial", makeAgentConfig({
-        name: "partial",
-        extensions: ["web-search"],
-        skills: ["planning"],
-      })]]);
+      const agents = new Map([
+        [
+          "partial",
+          makeAgentConfig({
+            name: "partial",
+            extensions: ["web-search"],
+            skills: ["planning"],
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       const config = getConfig("partial");
@@ -253,10 +263,15 @@ describe("agent type registry", () => {
     });
 
     it("getToolNamesForType works for user agents", () => {
-      const agents = new Map([["auditor", makeAgentConfig({
-        name: "auditor",
-        builtinToolNames: ["read", "grep", "find"],
-      })]]);
+      const agents = new Map([
+        [
+          "auditor",
+          makeAgentConfig({
+            name: "auditor",
+            builtinToolNames: ["read", "grep", "find"],
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       const names = getToolNamesForType("auditor");
@@ -265,10 +280,15 @@ describe("agent type registry", () => {
 
     it("getToolNamesForType honors an explicit empty builtinToolNames as zero built-ins", () => {
       // `tools: none` and `tools:` with only `ext:` entries both produce `[]`.
-      const agents = new Map([["ext-only", makeAgentConfig({
-        name: "ext-only",
-        builtinToolNames: [],
-      })]]);
+      const agents = new Map([
+        [
+          "ext-only",
+          makeAgentConfig({
+            name: "ext-only",
+            builtinToolNames: [],
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       expect(getToolNamesForType("ext-only")).toEqual([]);
@@ -291,11 +311,16 @@ describe("agent type registry", () => {
     });
 
     it("user agent overrides default with same name", () => {
-      const agents = new Map([["Explore", makeAgentConfig({
-        name: "Explore",
-        description: "Custom Explore",
-        builtinToolNames: BUILTIN_TOOL_NAMES,
-      })]]);
+      const agents = new Map([
+        [
+          "Explore",
+          makeAgentConfig({
+            name: "Explore",
+            description: "Custom Explore",
+            builtinToolNames: BUILTIN_TOOL_NAMES,
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       const config = getConfig("Explore");
@@ -304,10 +329,15 @@ describe("agent type registry", () => {
     });
 
     it("disabled agent is excluded from available types", () => {
-      const agents = new Map([["Plan", makeAgentConfig({
-        name: "Plan",
-        enabled: false,
-      })]]);
+      const agents = new Map([
+        [
+          "Plan",
+          makeAgentConfig({
+            name: "Plan",
+            enabled: false,
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       expect(isValidType("Plan")).toBe(false);
@@ -315,10 +345,15 @@ describe("agent type registry", () => {
     });
 
     it("general-purpose can be disabled but fallback still works", () => {
-      const agents = new Map([["general-purpose", makeAgentConfig({
-        name: "general-purpose",
-        enabled: false,
-      })]]);
+      const agents = new Map([
+        [
+          "general-purpose",
+          makeAgentConfig({
+            name: "general-purpose",
+            enabled: false,
+          }),
+        ],
+      ]);
       registerAgents(agents);
 
       expect(isValidType("general-purpose")).toBe(false);
@@ -387,11 +422,12 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
     registerAgents(new Map());
   });
 
-  const roster = () => new Map([
-    ["scout", makeAgentConfig({ name: "scout" })],
-    ["retired", makeAgentConfig({ name: "retired", enabled: false })],
-    ["router", makeAgentConfig({ name: "router" })],
-  ]);
+  const roster = () =>
+    new Map([
+      ["scout", makeAgentConfig({ name: "scout" })],
+      ["retired", makeAgentConfig({ name: "retired", enabled: false })],
+      ["router", makeAgentConfig({ name: "router" })],
+    ]);
 
   it("resolves an enabled type case-insensitively", () => {
     registerAgents(roster());
@@ -401,7 +437,9 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
   it("falls back to general-purpose when unset, reporting what was asked for", () => {
     registerAgents(roster());
     expect(resolveSpawnType("typoo")).toEqual({
-      ok: true, type: "general-purpose", fellBackFrom: "typoo",
+      ok: true,
+      type: "general-purpose",
+      fellBackFrom: "typoo",
     });
   });
 
@@ -421,23 +459,29 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
     // disabled agent dispatched with its own prompt and general-purpose's tools.
     registerAgents(roster());
     expect(resolveSpawnType("retired")).toEqual({
-      ok: true, type: "general-purpose", fellBackFrom: "retired",
+      ok: true,
+      type: "general-purpose",
+      fellBackFrom: "retired",
     });
     setFallbackSubagent(NO_FALLBACK);
     expect(resolveSpawnType("retired").ok).toBe(false);
   });
 
   it("refuses to guess between two types differing only by case", () => {
-    registerAgents(new Map([
-      ["Scout", makeAgentConfig({ name: "Scout" })],
-      ["scout", makeAgentConfig({ name: "scout" })],
-    ]));
+    registerAgents(
+      new Map([
+        ["Scout", makeAgentConfig({ name: "Scout" })],
+        ["scout", makeAgentConfig({ name: "scout" })],
+      ]),
+    );
     // An exact match is still unambiguous...
     expect(resolveSpawnType("scout")).toEqual({ ok: true, type: "scout" });
     // ...but a differently-cased spelling matches both, so it must not pick one.
     expect(resolveSpawnType("SCOUT").ok).toBe(true);
     expect(resolveSpawnType("SCOUT")).toEqual({
-      ok: true, type: "general-purpose", fellBackFrom: "SCOUT",
+      ok: true,
+      type: "general-purpose",
+      fellBackFrom: "SCOUT",
     });
   });
 
@@ -445,7 +489,9 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
     registerAgents(roster());
     setFallbackSubagent("router");
     expect(resolveSpawnType("typoo")).toEqual({
-      ok: true, type: "router", fellBackFrom: "typoo",
+      ok: true,
+      type: "router",
+      fellBackFrom: "typoo",
     });
   });
 
@@ -487,7 +533,9 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
     expect(resolveEnabledTypeIn(registry, " SCOUT ")).toBe("scout");
     // ...while the policy layer still honors it.
     expect(resolveSpawnTypeIn(registry, "typoo")).toEqual({
-      ok: true, type: "router", fellBackFrom: "typoo",
+      ok: true,
+      type: "router",
+      fellBackFrom: "typoo",
     });
   });
 });

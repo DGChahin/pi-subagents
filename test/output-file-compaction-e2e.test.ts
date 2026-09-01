@@ -53,9 +53,7 @@ describe("output-file streaming across a real compaction (#145)", () => {
     // splits a turn), so a fixed FIFO would desync. Decide from the request.
     const respond = (context: { messages: Array<{ role: string; content: unknown }> }) => {
       const last = context.messages[context.messages.length - 1];
-      const text = typeof last?.content === "string"
-        ? last.content
-        : JSON.stringify(last?.content ?? "");
+      const text = typeof last?.content === "string" ? last.content : JSON.stringify(last?.content ?? "");
       // Compaction requests first — their instruction embeds the transcript,
       // so the "question N" branch below would otherwise match inside it.
       // Markers are pi's own prompt texts (SUMMARIZATION_PROMPT and

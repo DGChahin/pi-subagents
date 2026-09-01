@@ -91,7 +91,7 @@ export interface AgentConfig {
   sourcePath?: string;
 }
 
-export type JoinMode = 'async' | 'group' | 'smart';
+export type JoinMode = "async" | "group" | "smart";
 
 /**
  * How `@handle message` starts an agent that is not already running.
@@ -104,7 +104,7 @@ export type JoinMode = 'async' | 'group' | 'smart';
  * Messaging a running agent and resuming a finished one are direct in every
  * mode — Claude Code only differs from us on the *new* invocation.
  */
-export type AgentMentionMode = 'model' | 'direct' | 'off';
+export type AgentMentionMode = "model" | "direct" | "off";
 
 /**
  * What survives a record's eviction so `@handle` keeps working. The live record
@@ -126,9 +126,7 @@ export interface AgentTombstone {
  * What `@handle` resolved to: an agent still in memory, or the remains of one
  * whose conversation can be reopened from disk.
  */
-export type MentionResolution =
-  | { kind: "live"; record: AgentRecord }
-  | { kind: "tombstone"; entry: AgentTombstone };
+export type MentionResolution = { kind: "live"; record: AgentRecord } | { kind: "tombstone"; entry: AgentTombstone };
 
 export interface AgentRecord {
   id: string;

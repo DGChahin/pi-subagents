@@ -39,19 +39,18 @@ function render(status: "error" | "stopped" | "aborted", resultPreview: string):
     },
     { expanded: false },
     theme,
-  ).render(120).join("\n");
+  )
+    .render(120)
+    .join("\n");
 }
 
 describe("background Agent error rendering", () => {
-  it.each(["error", "stopped", "aborted"] as const)(
-    "shows the real result preview for a %s completion",
-    (status) => {
-      const message = 'Cannot run with isolation: "worktree" — Git probe failed.';
-      const output = render(status, message);
+  it.each(["error", "stopped", "aborted"] as const)("shows the real result preview for a %s completion", (status) => {
+    const message = 'Cannot run with isolation: "worktree" — Git probe failed.';
+    const output = render(status, message);
 
-      expect(output).toContain(`<error>✗</error> *Probe repository* <dim>${status}</dim>`);
-      expect(output).toContain(message);
-      expect(output).not.toContain("Aborted (max turns exceeded)");
-    },
-  );
+    expect(output).toContain(`<error>✗</error> *Probe repository* <dim>${status}</dim>`);
+    expect(output).toContain(message);
+    expect(output).not.toContain("Aborted (max turns exceeded)");
+  });
 });

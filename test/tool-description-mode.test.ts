@@ -289,8 +289,7 @@ describe("toolDescriptionMode", () => {
   // parameter could keep costing tokens (and stay callable) while the prose
   // claimed otherwise.
   describe("schedulingEnabled gates the schedule parameter", () => {
-    const props = (tools: Map<string, any>) =>
-      Object.keys(tools.get("Agent").parameters?.properties ?? {});
+    const props = (tools: Map<string, any>) => Object.keys(tools.get("Agent").parameters?.properties ?? {});
 
     it("advertises `schedule` by default", () => {
       expect(props(setup())).toContain("schedule");
@@ -313,8 +312,7 @@ describe("toolDescriptionMode", () => {
   // `pi-agent-*` branch that was never created. Schema and prose have to move
   // together, which is why both are asserted here.
   describe("worktreeIsolation gates the isolation parameter and its prose", () => {
-    const props = (tools: Map<string, any>) =>
-      Object.keys(tools.get("Agent").parameters?.properties ?? {});
+    const props = (tools: Map<string, any>) => Object.keys(tools.get("Agent").parameters?.properties ?? {});
 
     it("advertises `isolation` in schema and prose by default", () => {
       const tools = setup();

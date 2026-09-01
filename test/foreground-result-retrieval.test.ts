@@ -87,7 +87,6 @@ async function runBackgroundSteeredAgent(tools: Map<string, any>) {
   expect(id, "background spawn should expose its record id").toBeTruthy();
   await flush();
   return { receipt, id: id as string };
-
 }
 
 describe("top-level background result identity and foreground rejection", () => {
@@ -150,13 +149,9 @@ describe("top-level background result identity and foreground rejection", () => 
     subagentsExtension(pi);
     const { id } = await runBackgroundSteeredAgent(tools);
 
-    const read = await tools.get("get_subagent_result").execute(
-      "tc-read",
-      { agent_id: id, wait: true },
-      undefined,
-      undefined,
-      ctx(),
-    );
+    const read = await tools
+      .get("get_subagent_result")
+      .execute("tc-read", { agent_id: id, wait: true }, undefined, undefined, ctx());
     expect(textOf(read)).not.toContain("Agent not found");
     expect(textOf(read)).toContain("wrapped up at the turn limit");
     expect(textOf(read)).toContain("THE-RESULT-PAYLOAD");
@@ -171,13 +166,9 @@ describe("top-level background result identity and foreground rejection", () => 
 
     expect(textOf(receipt)).toContain(`Agent ID: ${id}`);
 
-    const bogus = await tools.get("get_subagent_result").execute(
-      "tc-bogus",
-      { agent_id: "3f1320a7-74ec-422" },
-      undefined,
-      undefined,
-      ctx(),
-    );
+    const bogus = await tools
+      .get("get_subagent_result")
+      .execute("tc-bogus", { agent_id: "3f1320a7-74ec-422" }, undefined, undefined, ctx());
     expect(textOf(bogus)).toContain("Agent not found");
 
     await lifecycle.get("session_shutdown")?.({}, ctx());
@@ -194,13 +185,9 @@ describe("top-level background result identity and foreground rejection", () => 
     await other.lifecycle.get("session_start")?.({}, ctx());
     await other.lifecycle.get("session_shutdown")?.({}, ctx());
 
-    const read = await parent.tools.get("get_subagent_result").execute(
-      "tc-read",
-      { agent_id: id, wait: true },
-      undefined,
-      undefined,
-      ctx(),
-    );
+    const read = await parent.tools
+      .get("get_subagent_result")
+      .execute("tc-read", { agent_id: id, wait: true }, undefined, undefined, ctx());
     expect(textOf(read)).not.toContain("Agent not found");
     expect(textOf(read)).toContain("THE-RESULT-PAYLOAD");
 
@@ -212,24 +199,16 @@ describe("top-level background result identity and foreground rejection", () => 
     subagentsExtension(pi);
     const { id } = await runBackgroundSteeredAgent(tools);
 
-    const consumed = await tools.get("get_subagent_result").execute(
-      "tc-read",
-      { agent_id: id, wait: true },
-      undefined,
-      undefined,
-      ctx(),
-    );
+    const consumed = await tools
+      .get("get_subagent_result")
+      .execute("tc-read", { agent_id: id, wait: true }, undefined, undefined, ctx());
     expect(textOf(consumed)).toContain("THE-RESULT-PAYLOAD");
 
     await lifecycle.get("session_before_switch")?.();
 
-    const missing = await tools.get("get_subagent_result").execute(
-      "tc-read-again",
-      { agent_id: id },
-      undefined,
-      undefined,
-      ctx(),
-    );
+    const missing = await tools
+      .get("get_subagent_result")
+      .execute("tc-read-again", { agent_id: id }, undefined, undefined, ctx());
     expect(textOf(missing)).toContain("Agent not found");
 
     await lifecycle.get("session_shutdown")?.({}, ctx());

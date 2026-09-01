@@ -52,7 +52,6 @@ function makeRecord(): AgentRecord {
   };
 }
 
-
 beforeEach(() => {
   registerColoredReviewer();
 });
@@ -62,7 +61,6 @@ afterEach(() => {
 });
 
 describe("custom agent color runtime surfaces", () => {
-
   it("renders the FleetView row with the display name and color", () => {
     const record = makeRecord();
     const manager = {
@@ -84,19 +82,17 @@ describe("custom agent color runtime surfaces", () => {
 
     try {
       fleet.update();
-      const output = factory?.(
-        { requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } },
-        theme,
-      ).render(120).join("\n");
+      const output = factory?.({ requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } }, theme)
+        .render(120)
+        .join("\n");
 
       expect(output).toContain(DISPLAY_NAME);
       expect(output).toContain(PURPLE_BACKGROUND);
 
       registerColoredReviewer("invalid");
-      const fallback = factory?.(
-        { requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } },
-        theme,
-      ).render(120).join("\n");
+      const fallback = factory?.({ requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } }, theme)
+        .render(120)
+        .join("\n");
       expect(fallback).toContain(`<muted>${DISPLAY_NAME}</muted>`);
       expect(fallback).not.toContain(PURPLE_BACKGROUND);
     } finally {
@@ -107,7 +103,9 @@ describe("custom agent color runtime surfaces", () => {
   it("renders the conversation viewer header with the display name and color", () => {
     const record = makeRecord();
     const viewer = new ConversationViewer(
-      { terminal: { rows: 30, columns: 120 }, requestRender: vi.fn() } as unknown as ConstructorParameters<typeof ConversationViewer>[0],
+      { terminal: { rows: 30, columns: 120 }, requestRender: vi.fn() } as unknown as ConstructorParameters<
+        typeof ConversationViewer
+      >[0],
       record.session!,
       record,
       undefined,

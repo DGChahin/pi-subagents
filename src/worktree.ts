@@ -52,26 +52,26 @@ export function isWorktreeIsolationEnabled(): boolean {
 
 export type WorktreeCleanupResult =
   | {
-    status: "unchanged";
-    hasChanges: false;
-    branch?: never;
-    path?: never;
-    error?: never;
-  }
+      status: "unchanged";
+      hasChanges: false;
+      branch?: never;
+      path?: never;
+      error?: never;
+    }
   | {
-    status: "checkpointed";
-    hasChanges: true;
-    branch: string;
-    path: string;
-    error?: never;
-  }
+      status: "checkpointed";
+      hasChanges: true;
+      branch: string;
+      path: string;
+      error?: never;
+    }
   | {
-    status: "failed";
-    hasChanges?: never;
-    branch?: never;
-    path: string;
-    error: string;
-  };
+      status: "failed";
+      hasChanges?: never;
+      branch?: never;
+      path: string;
+      error: string;
+    };
 
 /**
  * Create a temporary git worktree for an agent.
@@ -83,9 +83,7 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
   let subdir: string;
   try {
     execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, stdio: "pipe", timeout: 5000 });
-    baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, stdio: "pipe", timeout: 5000 })
-      .toString()
-      .trim();
+    baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd, stdio: "pipe", timeout: 5000 }).toString().trim();
     // Where cwd sits inside the repo ("" at the root): the agent must work at
     // the same subdirectory inside the copy, or a monorepo-package cwd would
     // silently widen to the whole repo. realpath both sides — git emits
@@ -117,10 +115,7 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
 }
 
 /** Commit current work and update its result branch without removing the resumable worktree. */
-export function checkpointWorktree(
-  worktree: WorktreeInfo,
-  agentDescription: string,
-): WorktreeCleanupResult {
+export function checkpointWorktree(worktree: WorktreeInfo, agentDescription: string): WorktreeCleanupResult {
   if (!existsSync(worktree.path)) {
     return {
       status: "failed",
@@ -134,7 +129,9 @@ export function checkpointWorktree(
       cwd: worktree.path,
       stdio: "pipe",
       timeout: 10000,
-    }).toString().trim();
+    })
+      .toString()
+      .trim();
 
     if (status) {
       execFileSync("git", ["add", "-A"], { cwd: worktree.path, stdio: "pipe", timeout: 10000 });
@@ -150,7 +147,9 @@ export function checkpointWorktree(
       cwd: worktree.path,
       stdio: "pipe",
       timeout: 5000,
-    }).toString().trim();
+    })
+      .toString()
+      .trim();
     if (currentSha === worktree.baseSha) {
       return { status: "unchanged", hasChanges: false };
     }
@@ -191,11 +190,7 @@ export function checkpointWorktree(
 }
 
 /** Save final changes, remove the retained worktree, and keep its result branch. */
-export function cleanupWorktree(
-  cwd: string,
-  worktree: WorktreeInfo,
-  agentDescription: string,
-): WorktreeCleanupResult {
+export function cleanupWorktree(cwd: string, worktree: WorktreeInfo, agentDescription: string): WorktreeCleanupResult {
   const result = checkpointWorktree(worktree, agentDescription);
   if (result.status === "failed") return result;
 
@@ -224,7 +219,9 @@ function removeWorktree(cwd: string, worktreePath: string): string | undefined {
     // removal successful or prove that the retained path is safe to forget.
     try {
       execFileSync("git", ["worktree", "prune"], { cwd, stdio: "pipe", timeout: 5000 });
-    } catch { /* retain the original removal error */ }
+    } catch {
+      /* retain the original removal error */
+    }
     return err instanceof Error ? err.message : String(err);
   }
 }
@@ -235,5 +232,7 @@ function removeWorktree(cwd: string, worktreePath: string): string | undefined {
 export function pruneWorktrees(cwd: string): void {
   try {
     execFileSync("git", ["worktree", "prune"], { cwd, stdio: "pipe", timeout: 5000 });
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }

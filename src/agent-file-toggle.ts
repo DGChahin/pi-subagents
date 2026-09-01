@@ -108,9 +108,9 @@ const FENCE = /^---[ \t]*$/;
  * usable block — notably for a BOM-prefixed file, which the parser also reads
  * as having none, so writing a key into it would change nothing on load.
  */
-function splitFrontmatter(content: string):
-  | { lines: string[]; openIdx: number; closeIdx: number; eol: string }
-  | undefined {
+function splitFrontmatter(
+  content: string,
+): { lines: string[]; openIdx: number; closeIdx: number; eol: string } | undefined {
   const lines = content.split(/(?<=\n)/);
   if (lines.length === 0 || !FENCE.test(lines[0].replace(/\r?\n$/, ""))) return undefined;
   const closeIdx = lines.findIndex((l, i) => i > 0 && FENCE.test(l.replace(/\r?\n$/, "")));

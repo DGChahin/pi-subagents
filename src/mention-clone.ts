@@ -137,10 +137,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
     // The conversation as the main session resolves it: compaction applied,
     // branch summaries substituted.
-    const conversation = buildSessionContext(
-      ctx.sessionManager.getEntries(),
-      ctx.sessionManager.getLeafId(),
-    );
+    const conversation = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
     // Pi 0.82.0 added this; below it the field is absent and the clone takes
     // the settings level instead, which is what a session that never ran
     // `/think` is on anyway. Same shim shape as `modelRuntime` below.
@@ -189,7 +186,5 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     session?.dispose?.();
   }
 
-  return spawned
-    ? { spawned: true }
-    : { spawned: false, error: "the conversation clone did not start it" };
+  return spawned ? { spawned: true } : { spawned: false, error: "the conversation clone did not start it" };
 }

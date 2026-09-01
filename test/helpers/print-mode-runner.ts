@@ -89,10 +89,7 @@ export type FauxReply = string | FauxContentBlock | FauxContentBlock[] | Assista
  * with that call's own `Context`, so it can decide what to emit from the prompt
  * it sees — order-independent, unlike a flat FIFO `steps` list.
  */
-export type FauxResponder = (
-  context: Context,
-  state: { callCount: number },
-) => FauxReply | Promise<FauxReply>;
+export type FauxResponder = (context: Context, state: { callCount: number }) => FauxReply | Promise<FauxReply>;
 
 export interface RunPrintModeOptions {
   /** The user prompt that kicks off the parent turn. */
@@ -198,24 +195,21 @@ export function agentCall(
 type FauxRoute = FauxReply | ((ctx: Context) => FauxReply | Promise<FauxReply>);
 
 function resolveReply(reply: FauxRoute, ctx: Context): FauxReply | Promise<FauxReply> {
-  return typeof reply === "function"
-    ? (reply as (context: Context) => FauxReply | Promise<FauxReply>)(ctx)
-    : reply;
+  return typeof reply === "function" ? (reply as (context: Context) => FauxReply | Promise<FauxReply>)(ctx) : reply;
 }
 
 /** Agent IDs carried by real background completion callbacks in this context. */
 export function completionTaskIds(context: Context): string[] {
   return context.messages.flatMap((message) => {
     const content = (message as { content?: unknown }).content;
-    const text = typeof content === "string"
-      ? content
-      : Array.isArray(content)
+    const text =
+      typeof content === "string"
         ? content
-            .map((block: { type?: string; text?: string }) =>
-              block.type === "text" ? (block.text ?? "") : "",
-            )
-            .join("")
-        : "";
+        : Array.isArray(content)
+          ? content
+              .map((block: { type?: string; text?: string }) => (block.type === "text" ? (block.text ?? "") : ""))
+              .join("")
+          : "";
     return [...text.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map((match) => match[1]);
   });
 }
@@ -237,13 +231,10 @@ export function routeBySession(routes: {
 
     const fetched = context.messages.some(
       (message) =>
-        message.role === "toolResult" &&
-        (message as { toolName?: string }).toolName === "get_subagent_result",
+        message.role === "toolResult" && (message as { toolName?: string }).toolName === "get_subagent_result",
     );
     if (fetched) {
-      return routes.parentFinal != null
-        ? resolveReply(routes.parentFinal, context)
-        : "Done.";
+      return routes.parentFinal != null ? resolveReply(routes.parentFinal, context) : "Done.";
     }
 
     const taskId = completionTaskIds(context).at(-1);
@@ -252,9 +243,7 @@ export function routeBySession(routes: {
     }
 
     const dispatched = context.messages.some(
-      (message) =>
-        message.role === "toolResult" &&
-        (message as { toolName?: string }).toolName === "Agent",
+      (message) => message.role === "toolResult" && (message as { toolName?: string }).toolName === "Agent",
     );
     if (dispatched) {
       throw new Error("Parent resumed before the background completion callback arrived");
@@ -336,9 +325,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
       // createAgentSession silently substitute another model.
       model = (getModel as (p: string, m: string) => Model<string> | undefined)(provider, modelId);
       if (!model) {
-        throw new Error(
-          `runPrintMode (live mode): model "${provider}/${modelId}" not found in the builtin catalog`,
-        );
+        throw new Error(`runPrintMode (live mode): model "${provider}/${modelId}" not found in the builtin catalog`);
       }
     }
     // Let createAgentSession build the real, auth-backed registry/runtime.
@@ -414,9 +401,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   // manager on the global Symbol.
   await session.bindExtensions({});
 
-  const manager = (globalThis as Record<symbol, unknown>)[MANAGER_KEY] as
-    | ManagerHandle
-    | undefined;
+  const manager = (globalThis as Record<symbol, unknown>)[MANAGER_KEY] as ManagerHandle | undefined;
 
   // --- subagent hold condition (the pi-chonky-step monkey-patch) ---
   // Block the parent agent loop while background subagents are still running, so
@@ -453,10 +438,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
         }
       }
     }
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       responseText += event.assistantMessageEvent.delta;
     }
   });
@@ -523,10 +505,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
               return id ? [id] : [];
             });
             if (manager?.hasRunning()) await manager.waitForAll();
-            while (
-              !failed &&
-              dispatchedIds.some((id) => !callbackAgentIds.has(id))
-            ) {
+            while (!failed && dispatchedIds.some((id) => !callbackAgentIds.has(id))) {
               await new Promise((resolve) => setTimeout(resolve, 10));
             }
             if (failed) break;
@@ -536,11 +515,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
               const id = /Agent ID:\s*([^\s]+)/.exec(text)?.[1];
               return id ? [id] : [];
             });
-            if (
-              !manager?.hasRunning() &&
-              currentIds.every((id) => callbackAgentIds.has(id)) &&
-              session.isIdle
-            ) {
+            if (!manager?.hasRunning() && currentIds.every((id) => callbackAgentIds.has(id)) && session.isIdle) {
               break;
             }
           }
@@ -670,7 +645,9 @@ function lastAssistantText(session: AgentSession): string {
     const msg = messages[i];
     if (msg.role !== "assistant") continue;
     const text = msg.content
-      .map((b) => ((b as { type?: string; text?: string }).type === "text" ? (b as { text?: string }).text ?? "" : ""))
+      .map((b) =>
+        (b as { type?: string; text?: string }).type === "text" ? ((b as { text?: string }).text ?? "") : "",
+      )
       .join("")
       .trim();
     if (text) return text;

@@ -273,12 +273,18 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
       // already torn down — one hung handler would leave a dead terminal.
       await Promise.race([
         runner.emit({ type: "session_shutdown", reason: "quit" }),
-        new Promise<void>(resolve => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
+        new Promise<void>((resolve) => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
       ]);
     }
-  } catch { /* a partial session must degrade, not take the teardown down with it */ }
+  } catch {
+    /* a partial session must degrade, not take the teardown down with it */
+  }
   // Always, even on timeout: disposal is what this function ultimately exists to do.
-  try { session?.dispose?.(); } catch { /* ignore */ }
+  try {
+    session?.dispose?.();
+  } catch {
+    /* ignore */
+  }
 }
 
 export class AgentManager {
@@ -357,13 +363,7 @@ export class AgentManager {
    * Spawn an agent and return its ID immediately (for background use).
    * If the concurrency limit is reached, the agent is queued.
    */
-  spawn(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: SubagentType,
-    prompt: string,
-    options: SpawnOptions,
-  ): string {
+  spawn(pi: ExtensionAPI, ctx: ExtensionContext, type: SubagentType, prompt: string, options: SpawnOptions): string {
     // Validate before the queue branch — a queued spawn should fail at the
     // call, not minutes later at drain. Throw (not warn): programmatic callers
     // can fix and retry; the RPC layer converts throws into error envelopes.
@@ -377,11 +377,12 @@ export class AgentManager {
       // Nested children are filtered out of every top-level surface, so no
       // handle: nothing can address them and they must not consume a name a
       // top-level sibling could otherwise take.
-      handle: options.parentAgentId !== undefined
-        ? undefined
-        // A reclaimed handle is used as-is: it belongs to the conversation this
-        // spawn is reopening, and re-deriving it would lose the numbering.
-        : options.reclaim?.handle ?? assignHandle(handleBase(type), this.takenHandles()),
+      handle:
+        options.parentAgentId !== undefined
+          ? undefined
+          : // A reclaimed handle is used as-is: it belongs to the conversation this
+            // spawn is reopening, and re-deriving it would lose the numbering.
+            (options.reclaim?.handle ?? assignHandle(handleBase(type), this.takenHandles())),
       description: options.description,
       // Reclaimed here, or filled in below from `name` — in which case it must
       // see the handle this record just took, since both come out of the same
@@ -402,16 +403,13 @@ export class AgentManager {
       invocation: options.invocation,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
-      parentRunRevision: options.parentAgentId === undefined
-        ? undefined
-        : this.agents.get(options.parentAgentId)?.runRevision,
+      parentRunRevision:
+        options.parentAgentId === undefined ? undefined : this.agents.get(options.parentAgentId)?.runRevision,
       maxSubagentDepth: options.maxSubagentDepth,
       rootSessionId: options.rootSessionId,
       // Capture before the queue decision. A queued top-level run belongs to
       // the parent session that dispatched it, not the session active when it starts.
-      parentSessionGeneration: options.parentAgentId === undefined
-        ? this.captureParentGeneration?.()
-        : undefined,
+      parentSessionGeneration: options.parentAgentId === undefined ? this.captureParentGeneration?.() : undefined,
     };
     this.agents.set(id, record);
     // After the insert, so `takenHandles()` already counts this record's own
@@ -439,7 +437,11 @@ export class AgentManager {
       record.error = err instanceof Error ? err.message : String(err);
       record.completedAt = Date.now();
       record.settledRevision = record.runRevision;
-      try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
+      try {
+        this.onFinish?.(record);
+      } catch {
+        /* ignore activity side-effect errors */
+      }
       this.agents.delete(id);
       throw err;
     }
@@ -469,7 +471,7 @@ export class AgentManager {
       if (!wt) {
         throw new Error(
           'Cannot run with isolation: "worktree" — not a git repo, no commits yet, or `git worktree add` failed. ' +
-          'Initialize git and commit at least once, or omit `isolation`.',
+            "Initialize git and commit at least once, or omit `isolation`.",
         );
       }
       record.worktree = wt;
@@ -499,7 +501,10 @@ export class AgentManager {
       options.signal.addEventListener("abort", onParentAbort, { once: true });
       detachParentSignal = () => options.signal!.removeEventListener("abort", onParentAbort);
     }
-    const detach = () => { detachParentSignal?.(); detachParentSignal = undefined; };
+    const detach = () => {
+      detachParentSignal?.();
+      detachParentSignal = undefined;
+    };
     const runRevision = record.runRevision;
     const revisionWorktree = record.worktree;
 
@@ -589,8 +594,8 @@ export class AgentManager {
         options.onSessionCreated?.(session);
         this.onActivity?.(record, { type: "session" });
       },
-    })
-      .then(async ({ responseText, session, aborted, steered, failure }) => {
+    }).then(
+      async ({ responseText, session, aborted, steered, failure }) => {
         const isCurrent = record.runRevision === runRevision;
         if (isCurrent) {
           // Don't overwrite status if externally stopped via abort().
@@ -615,7 +620,8 @@ export class AgentManager {
 
         this.applyWorktreeResult(record, wtResult, baseCwd, customCwd !== undefined);
         return responseText;
-      }, async (err) => {
+      },
+      async (err) => {
         const isCurrent = record.runRevision === runRevision;
         if (isCurrent) {
           if (record.status !== "stopped") record.status = "error";
@@ -629,7 +635,8 @@ export class AgentManager {
 
         this.applyWorktreeResult(record, wtResult, baseCwd, customCwd !== undefined);
         return "";
-      });
+      },
+    );
 
     record.promise = promise;
     // The marker is a reaction to `record.promise`, so the exact revision's
@@ -638,8 +645,16 @@ export class AgentManager {
       if (record.runRevision === runRevision) {
         record.settledRevision = runRevision;
         if (!options.isBackground) record.resultConsumed = true;
-        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
-        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+        try {
+          this.onFinish?.(record);
+        } catch {
+          /* ignore activity side-effect errors */
+        }
+        try {
+          this.onComplete?.(record);
+        } catch {
+          /* ignore completion side-effect errors */
+        }
       }
       if (options.isBackground && occupiesPoolSlot(record)) this.runningBackground--;
       if (options.isBackground) this.drainQueue();
@@ -658,7 +673,11 @@ export class AgentManager {
   ): Promise<WorktreeCleanupResult | undefined> {
     const outputCleanup = record.outputCleanup;
     if (outputCleanup && (record.outputCleanupRevision ?? revision) === revision) {
-      try { outputCleanup(); } catch { /* ignore transcript flush errors */ }
+      try {
+        outputCleanup();
+      } catch {
+        /* ignore transcript flush errors */
+      }
       if (record.outputCleanup === outputCleanup) {
         record.outputCleanup = undefined;
         record.outputCleanupRevision = undefined;
@@ -692,12 +711,12 @@ export class AgentManager {
     record.worktreeResult = result;
 
     if (result.status === "failed") {
-      const sameFailure = previous?.status === "failed"
-        && previous.path === result.path
-        && previous.error === result.error;
+      const sameFailure =
+        previous?.status === "failed" && previous.path === result.path && previous.error === result.error;
       if (!sameFailure) {
-        record.result = (record.result ?? "")
-          + `\n\n---\nWorktree ${failureOperation} failed. Changes retained at \`${result.path}\`.\nError: ${result.error}`;
+        record.result =
+          (record.result ?? "") +
+          `\n\n---\nWorktree ${failureOperation} failed. Changes retained at \`${result.path}\`.\nError: ${result.error}`;
       }
       console.warn(`[pi-subagents] Worktree ${failureOperation} failed; retained at ${result.path}: ${result.error}`);
       return;
@@ -706,8 +725,9 @@ export class AgentManager {
 
     const repoNote = hasCustomCwd ? ` in \`${baseCwd}\`` : "";
     const mergeCwd = hasCustomCwd ? ` (run in \`${baseCwd}\`)` : "";
-    record.result = (record.result ?? "")
-      + `\n\n---\nChanges saved to branch \`${result.branch}\`${repoNote}. Merge with: \`git merge ${result.branch}\`${mergeCwd}`;
+    record.result =
+      (record.result ?? "") +
+      `\n\n---\nChanges saved to branch \`${result.branch}\`${repoNote}. Merge with: \`git merge ${result.branch}\`${mergeCwd}`;
   }
 
   /** Stop and settle only the nested children created by one exact parent run. */
@@ -719,14 +739,13 @@ export class AgentManager {
       this.abort(id);
       owned.push({ id, record, revision, promise: record.promise });
     }
-    await Promise.allSettled(owned.flatMap(child => child.promise ? [child.promise] : []));
+    await Promise.allSettled(owned.flatMap((child) => (child.promise ? [child.promise] : [])));
 
     const unsettled = owned.filter(
-      child => child.record.runRevision !== child.revision
-        || child.record.settledRevision !== child.revision,
+      (child) => child.record.runRevision !== child.revision || child.record.settledRevision !== child.revision,
     );
     if (unsettled.length === 0) return undefined;
-    return `Revision-owned child agents did not settle: ${unsettled.map(child => `${child.id}@${child.revision}`).join(", ")}`;
+    return `Revision-owned child agents did not settle: ${unsettled.map((child) => `${child.id}@${child.revision}`).join(", ")}`;
   }
 
   /** Start queued agents and resumed turns up to the concurrency limit. */
@@ -737,13 +756,7 @@ export class AgentManager {
       if (!record || record.status !== "queued") continue;
       if (next.kind === "resume") {
         if (record.runRevision === next.revision) {
-          this.startBackgroundResume(
-            record,
-            next.prompt,
-            next.revision,
-            next.parentSignal,
-            next.options,
-          );
+          this.startBackgroundResume(record, next.prompt, next.revision, next.parentSignal, next.options);
         }
         continue;
       }
@@ -756,7 +769,11 @@ export class AgentManager {
         record.error = err instanceof Error ? err.message : String(err);
         record.completedAt = Date.now();
         record.settledRevision = record.runRevision;
-        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
+        try {
+          this.onFinish?.(record);
+        } catch {
+          /* ignore activity side-effect errors */
+        }
         this.onComplete?.(record);
       }
     }
@@ -804,14 +821,16 @@ export class AgentManager {
 
   private canResume(record: AgentRecord): boolean {
     const session = record.session;
-    return session !== undefined
-      && !session.isStreaming
-      && !session.isCompacting
-      && record.status !== "running"
-      && record.status !== "queued"
-      && record.settledRevision === record.runRevision
-      && record.resultConsumed === true
-      && record.pendingDeliveryRevision !== record.runRevision;
+    return (
+      session !== undefined &&
+      !session.isStreaming &&
+      !session.isCompacting &&
+      record.status !== "running" &&
+      record.status !== "queued" &&
+      record.settledRevision === record.runRevision &&
+      record.resultConsumed === true &&
+      record.pendingDeliveryRevision !== record.runRevision
+    );
   }
 
   private beginResume(record: AgentRecord, status: "queued" | "running"): number {
@@ -919,12 +938,7 @@ export class AgentManager {
     if (record.runRevision !== revision) return record;
 
     if (record.worktreeBaseCwd) {
-      this.applyWorktreeResult(
-        record,
-        worktreeResult,
-        record.worktreeBaseCwd,
-        record.worktreeHasCustomCwd === true,
-      );
+      this.applyWorktreeResult(record, worktreeResult, record.worktreeBaseCwd, record.worktreeHasCustomCwd === true);
     }
     return record;
   }
@@ -951,7 +965,7 @@ export class AgentManager {
     else signal?.addEventListener("abort", forwardAbort, { once: true });
 
     const execution = this.executeResume(record, prompt, revision, controller.signal, options);
-    const promise = execution.then(resumed => resumed.runRevision === revision ? resumed.result ?? "" : "");
+    const promise = execution.then((resumed) => (resumed.runRevision === revision ? (resumed.result ?? "") : ""));
     record.promise = promise;
     const settlement = promise.then(() => {
       if (record.runRevision === revision) record.settledRevision = revision;
@@ -961,8 +975,16 @@ export class AgentManager {
       await settlement;
       if (resumed.runRevision !== revision || resumed.settledRevision !== revision) return undefined;
       resumed.resultConsumed = true;
-      try { this.onFinish?.(resumed); } catch { /* ignore activity side-effect errors */ }
-      try { this.onComplete?.(resumed); } catch { /* ignore completion side-effect errors */ }
+      try {
+        this.onFinish?.(resumed);
+      } catch {
+        /* ignore activity side-effect errors */
+      }
+      try {
+        this.onComplete?.(resumed);
+      } catch {
+        /* ignore completion side-effect errors */
+      }
       return resumed;
     } finally {
       signal?.removeEventListener("abort", forwardAbort);
@@ -1013,20 +1035,30 @@ export class AgentManager {
 
     // The session predates this run, so callers use this hook for any per-run
     // wiring that must happen only once a queued resume actually starts.
-    try { options.onStarted?.(); } catch { /* ignore caller wiring errors */ }
+    try {
+      options.onStarted?.();
+    } catch {
+      /* ignore caller wiring errors */
+    }
 
     const execution = this.executeResume(record, prompt, revision, controller.signal, options);
-    const promise = execution.then(
-      resumed => resumed.runRevision === revision ? resumed.result ?? "" : "",
-    );
+    const promise = execution.then((resumed) => (resumed.runRevision === revision ? (resumed.result ?? "") : ""));
     record.promise = promise;
     void promise.then(() => {
       parentSignal?.removeEventListener("abort", forwardAbort);
       if (occupiesPoolSlot(record)) this.runningBackground--;
       if (record.runRevision === revision) {
         record.settledRevision = revision;
-        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
-        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+        try {
+          this.onFinish?.(record);
+        } catch {
+          /* ignore activity side-effect errors */
+        }
+        try {
+          this.onComplete?.(record);
+        } catch {
+          /* ignore completion side-effect errors */
+        }
       }
       this.drainQueue();
     });
@@ -1123,9 +1155,7 @@ export class AgentManager {
   }
 
   listAgents(): AgentRecord[] {
-    return [...this.agents.values()].sort(
-      (a, b) => b.startedAt - a.startedAt,
-    );
+    return [...this.agents.values()].sort((a, b) => b.startedAt - a.startedAt);
   }
 
   abort(id: string): boolean {
@@ -1134,12 +1164,16 @@ export class AgentManager {
 
     // Remove from queue if queued
     if (record.status === "queued") {
-      this.queue = this.queue.filter(q => q.id !== id);
+      this.queue = this.queue.filter((q) => q.id !== id);
       record.stoppingRevision = record.runRevision;
       record.status = "stopped";
       record.completedAt = Date.now();
       record.settledRevision = record.runRevision;
-      try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
+      try {
+        this.onFinish?.(record);
+      } catch {
+        /* ignore activity side-effect errors */
+      }
       return true;
     }
 
@@ -1161,7 +1195,7 @@ export class AgentManager {
       .sort(([, a], [, b]) => (b.depth ?? 1) - (a.depth ?? 1));
 
     for (const [id, record] of candidates) {
-      if ([...this.agents.values()].some(child => child.parentAgentId === id)) continue;
+      if ([...this.agents.values()].some((child) => child.parentAgentId === id)) continue;
       this.removeRecord(id, record, shutdownSessions);
     }
   }
@@ -1170,7 +1204,9 @@ export class AgentManager {
   private removeRecord(id: string, record: AgentRecord, shutdownSessions?: AgentSession[]): void {
     if (record.settledRevision !== record.runRevision) {
       const worktreeNote = record.worktree ? ` Worktree retained at ${record.worktree.path}.` : "";
-      console.warn(`[pi-subagents] Agent ${id} is still settling revision ${record.runRevision}; artifacts were retained.${worktreeNote}`);
+      console.warn(
+        `[pi-subagents] Agent ${id} is still settling revision ${record.runRevision}; artifacts were retained.${worktreeNote}`,
+      );
       return;
     }
 
@@ -1212,7 +1248,11 @@ export class AgentManager {
     }
 
     if (record.outputCleanup) {
-      try { record.outputCleanup(); } catch { /* ignore transcript flush errors */ }
+      try {
+        record.outputCleanup();
+      } catch {
+        /* ignore transcript flush errors */
+      }
       record.outputCleanup = undefined;
       record.outputCleanupRevision = undefined;
     }
@@ -1254,11 +1294,12 @@ export class AgentManager {
 
   private cleanup() {
     const cutoff = Date.now() - 10 * 60_000;
-    this.removeRecordsChildFirst(record =>
-      record.status !== "running"
-      && record.status !== "queued"
-      && record.settledRevision === record.runRevision
-      && (record.completedAt ?? 0) < cutoff
+    this.removeRecordsChildFirst(
+      (record) =>
+        record.status !== "running" &&
+        record.status !== "queued" &&
+        record.settledRevision === record.runRevision &&
+        (record.completedAt ?? 0) < cutoff,
     );
   }
 
@@ -1269,11 +1310,12 @@ export class AgentManager {
    * (resultConsumed=false) — they will be evicted by the 10-minute cleanup timer instead.
    */
   clearCompleted(skipUnconsumed = false): void {
-    this.removeRecordsChildFirst(record =>
-      record.status !== "running"
-      && record.status !== "queued"
-      && record.settledRevision === record.runRevision
-      && (!skipUnconsumed || record.resultConsumed === true)
+    this.removeRecordsChildFirst(
+      (record) =>
+        record.status !== "running" &&
+        record.status !== "queued" &&
+        record.settledRevision === record.runRevision &&
+        (!skipUnconsumed || record.resultConsumed === true),
     );
     // Handles never cross a parent session boundary, even when an unconsumed
     // record remains available temporarily for explicit result retrieval.
@@ -1283,7 +1325,7 @@ export class AgentManager {
   /** Whether any agent revision is queued, running, or still settling after stop. */
   hasRunning(): boolean {
     return [...this.agents.values()].some(
-      record => record.status === "queued" || record.settledRevision !== record.runRevision,
+      (record) => record.status === "queued" || record.settledRevision !== record.runRevision,
     );
   }
 
@@ -1298,7 +1340,11 @@ export class AgentManager {
         record.status = "stopped";
         record.completedAt = Date.now();
         record.settledRevision = record.runRevision;
-        try { this.onFinish?.(record); } catch { /* ignore activity side-effect errors */ }
+        try {
+          this.onFinish?.(record);
+        } catch {
+          /* ignore activity side-effect errors */
+        }
         count++;
       }
     }
@@ -1323,8 +1369,8 @@ export class AgentManager {
     while (true) {
       this.drainQueue();
       const pending = [...this.agents.values()]
-        .filter(record => record.status === "queued" || record.settledRevision !== record.runRevision)
-        .map(record => record.promise)
+        .filter((record) => record.status === "queued" || record.settledRevision !== record.runRevision)
+        .map((record) => record.promise)
         .filter(Boolean);
       if (pending.length === 0) break;
       await Promise.allSettled(pending);
@@ -1344,13 +1390,21 @@ export class AgentManager {
     }
     this.agents.clear();
     this.tombstones.clear();
-    await Promise.all([...new Set(sessions)].map(session => shutdownChildSession(session)));
+    await Promise.all([...new Set(sessions)].map((session) => shutdownChildSession(session)));
     // Prune any orphaned git worktrees (crash recovery)
-    try { pruneWorktrees(process.cwd()); } catch { /* ignore */ }
+    try {
+      pruneWorktrees(process.cwd());
+    } catch {
+      /* ignore */
+    }
     // Also prune repos that caller-supplied cwds created worktrees in — a clean
     // exit with in-flight agents would otherwise leave stale registrations there.
     for (const repo of this.worktreeRepos) {
-      try { pruneWorktrees(repo); } catch { /* ignore */ }
+      try {
+        pruneWorktrees(repo);
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

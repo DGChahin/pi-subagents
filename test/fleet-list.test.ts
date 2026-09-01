@@ -99,14 +99,25 @@ function harness(agents: AgentRecord[]): Harness {
   const fakeTui = { requestRender: () => {}, terminal: { columns: 120, rows: 40 } };
 
   const ui: FleetUICtx = {
-    setWidget: (_key, content) => { widgetFactory = content as any; },
-    onTerminalInput: (h) => { inputHandler = h; return () => { inputHandler = undefined; }; },
+    setWidget: (_key, content) => {
+      widgetFactory = content as any;
+    },
+    onTerminalInput: (h) => {
+      inputHandler = h;
+      return () => {
+        inputHandler = undefined;
+      };
+    },
     getEditorText: () => editorText,
     notify: () => {},
     custom: ((factory: any) => {
       opened = true;
       return new Promise<undefined>((resolve) => {
-        const done = (r: undefined) => { closed = true; overlayDone = undefined; resolve(r); };
+        const done = (r: undefined) => {
+          closed = true;
+          overlayDone = undefined;
+          resolve(r);
+        };
         overlayDone = done;
         // Construct the overlay component so the controller wires viewerClose,
         // and keep it so tests can drive the real ConversationViewer's input.
@@ -127,10 +138,15 @@ function harness(agents: AgentRecord[]): Harness {
     overlayComponent: () => overlayComponent,
     press: (data) => inputHandler?.(data),
     render: (width = 120) => (widgetFactory ? widgetFactory(fakeTui, theme).render(width) : []),
-    setEditorText: (t) => { editorText = t; },
+    setEditorText: (t) => {
+      editorText = t;
+    },
     overlayOpened: () => opened,
     overlayClosed: () => closed,
-    closeOverlay: async () => { overlayDone?.(undefined); await Promise.resolve(); },
+    closeOverlay: async () => {
+      overlayDone?.(undefined);
+      await Promise.resolve();
+    },
     widgetTui: fakeTui,
   };
 }
@@ -176,7 +192,7 @@ describe("FleetList navigation", () => {
     const res = h.press(DOWN);
     expect(res).toEqual({ consume: true });
     // main selected, list active → nav hint shown
-    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
+    expect(h.render().some((l) => l.includes("enter view"))).toBe(true);
   });
 
   it("also activates on ← (matches the '← for agents' hint)", () => {
@@ -191,27 +207,21 @@ describe("FleetList navigation", () => {
   });
 
   it("ignores key-release events so one tap moves exactly one row", () => {
-    const h = harness([
-      makeRecord({ id: "a1", description: "one" }),
-      makeRecord({ id: "a2", description: "two" }),
-    ]);
-    h.press(DOWN);          // activate → selection on main (idx 0)
-    h.press(DOWN_RELEASE);  // release half of the SAME tap — must be a no-op
-    expect(h.render().find(l => l.includes("main"))).toContain("●");
-    h.press(DOWN);          // a real second tap → first agent
+    const h = harness([makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })]);
+    h.press(DOWN); // activate → selection on main (idx 0)
+    h.press(DOWN_RELEASE); // release half of the SAME tap — must be a no-op
+    expect(h.render().find((l) => l.includes("main"))).toContain("●");
+    h.press(DOWN); // a real second tap → first agent
     h.press(DOWN_RELEASE);
-    expect(h.render().find(l => l.includes("one"))).toContain("●");
-    expect(h.render().find(l => l.includes("two"))).toContain("○");
+    expect(h.render().find((l) => l.includes("one"))).toContain("●");
+    expect(h.render().find((l) => l.includes("two"))).toContain("○");
   });
 
   it("renders the whole selected row in the theme's primary text color (#230)", () => {
-    const h = harness([
-      makeRecord({ id: "a1", description: "one" }),
-      makeRecord({ id: "a2", description: "two" }),
-    ]);
+    const h = harness([makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })]);
     h.press(DOWN); // activate → main
     h.press(DOWN); // → a1
-    const selected = h.render().find(l => l.includes("one"))!;
+    const selected = h.render().find((l) => l.includes("one"))!;
     // Selection marker keeps accent color; row content uses primary text color.
     expect(selected).toContain("<accent>●</accent>");
     expect(selected).toContain("<text>one</text>");
@@ -219,7 +229,7 @@ describe("FleetList navigation", () => {
     // Agent display name rendered with the text token too (this type has no badge).
     expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
     // Inactive rows keep the muted/dim treatment.
-    const unselected = h.render().find(l => l.includes("two"))!;
+    const unselected = h.render().find((l) => l.includes("two"))!;
     expect(unselected).toContain("<dim>○</dim>");
     expect(unselected).toMatch(/<dim>\d+s · ↓ [\d.]+k? tokens<\/dim>/);
     expect(unselected).not.toContain("<text>");
@@ -233,12 +243,12 @@ describe("FleetList navigation", () => {
         makeRecord({ id: "a2", type: BADGED_TYPE, description: "two" }),
       ]);
       h.press(DOWN); // activate → main
-      const before = h.render().find(l => l.includes("one"))!;
+      const before = h.render().find((l) => l.includes("one"))!;
       expect(before).toContain(`${PURPLE_BACKGROUND}`);
       expect(before).toContain(` ${BADGED_CONFIG.displayName} `);
 
       h.press(DOWN); // → a1
-      const selected = h.render().find(l => l.includes("one"))!;
+      const selected = h.render().find((l) => l.includes("one"))!;
       // Selection bolds the badge rather than repainting it (Claude Code's FleetView) …
       expect(selected).toContain(PURPLE_BACKGROUND);
       expect(selected).toContain(`* ${BADGED_CONFIG.displayName} *`);
@@ -251,18 +261,15 @@ describe("FleetList navigation", () => {
   });
 
   it("moves selection down/up and clamps at the ends", () => {
-    const agents = [
-      makeRecord({ id: "a1", description: "one" }),
-      makeRecord({ id: "a2", description: "two" }),
-    ];
+    const agents = [makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })];
     const h = harness(agents);
     h.press(DOWN); // activate → index 0 (main)
     h.press(DOWN); // → 1 (a1)
-    expect(h.render().find(l => l.includes("one"))).toContain("●");
+    expect(h.render().find((l) => l.includes("one"))).toContain("●");
     h.press(DOWN); // → 2 (a2)
     h.press(DOWN); // clamp at 2
-    expect(h.render().find(l => l.includes("two"))).toContain("●");
-    expect(h.render().find(l => l.includes("one"))).toContain("○");
+    expect(h.render().find((l) => l.includes("two"))).toContain("●");
+    expect(h.render().find((l) => l.includes("one"))).toContain("○");
   });
 
   it("↑ above 'main' deactivates (returns to the prompt)", () => {
@@ -270,21 +277,21 @@ describe("FleetList navigation", () => {
     h.press(DOWN); // activate, index 0
     expect(h.press(UP)).toEqual({ consume: true });
     // back to inactive hint
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
   });
 
   it("Esc deactivates", () => {
     const h = harness([makeRecord()]);
     h.press(DOWN);
     expect(h.press(ESC)).toEqual({ consume: true });
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
   });
 
   it("passes non-nav keys through and cancels navigation", () => {
     const h = harness([makeRecord()]);
     h.press(DOWN);
     expect(h.press(RIGHT)).toBeUndefined();
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
   });
 
   it("ignores all input while disabled and hides the widget", () => {
@@ -302,12 +309,15 @@ describe("FleetList navigation", () => {
       const manager = { listAgents, abort: () => true } as unknown as AgentManager;
       const fleet = new FleetList(manager, new Map());
       fleet.setUICtx({
-        setWidget: () => {}, onTerminalInput: () => () => {}, getEditorText: () => "",
-        notify: () => {}, custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+        setWidget: () => {},
+        onTerminalInput: () => () => {},
+        getEditorText: () => "",
+        notify: () => {},
+        custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
       });
-      fleet.update();          // shows list, arms the timer
+      fleet.update(); // shows list, arms the timer
       fleet.setEnabled(false); // hides, clears the timer
-      fleet.setEnabled(true);  // re-shows — must re-arm the timer
+      fleet.setEnabled(true); // re-shows — must re-arm the timer
       const before = listAgents.mock.calls.length;
       vi.advanceTimersByTime(250); // a tick should fire and re-read the roster
       expect(listAgents.mock.calls.length).toBeGreaterThan(before);
@@ -349,12 +359,12 @@ describe("FleetList vs other focused components (#123)", () => {
     const h = harness([makeRecord()]);
     focusInHarness(h, realEditor());
     expect(h.press(DOWN)).toEqual({ consume: true }); // activate at the prompt
-    focusInHarness(h, { kind: "selector" });          // a dialog takes focus
+    focusInHarness(h, { kind: "selector" }); // a dialog takes focus
     expect(h.press(DOWN)).toBeUndefined();
     expect(h.press(ENTER)).toBeUndefined();
     expect(h.press(ESC)).toBeUndefined();
     // and the list dropped back to its inactive hint
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
   });
 
   it("still activates when the prompt editor has focus", () => {
@@ -376,8 +386,8 @@ describe("FleetList rendering", () => {
     const lines = h.render(120);
     // hint + blank + main + one agent
     expect(lines[0]).toContain("← for agents");
-    expect(lines.find(l => l.includes("main"))).toContain("●"); // main selected by default
-    const agentLine = lines.find(l => l.includes("Sleep then report 1"))!;
+    expect(lines.find((l) => l.includes("main"))).toContain("●"); // main selected by default
+    const agentLine = lines.find((l) => l.includes("Sleep then report 1"))!;
     expect(agentLine).toContain("○");
     expect(agentLine).toContain(getDisplayName("general-purpose"));
     expect(agentLine).toContain("↓ 13.1k tokens");
@@ -390,8 +400,8 @@ describe("FleetList rendering", () => {
       makeRecord({ id: "old", description: "oldest", startedAt: 1000 }),
     ];
     const lines = harness(agents).render();
-    const oldIdx = lines.findIndex(l => l.includes("oldest"));
-    const newIdx = lines.findIndex(l => l.includes("newest"));
+    const oldIdx = lines.findIndex((l) => l.includes("oldest"));
+    const newIdx = lines.findIndex((l) => l.includes("newest"));
     expect(oldIdx).toBeGreaterThanOrEqual(0);
     expect(oldIdx).toBeLessThan(newIdx); // earliest sits above the later one
   });
@@ -402,22 +412,22 @@ describe("FleetList rendering", () => {
       makeRecord({ id: "pending", description: "queued one", status: "queued", session: undefined }),
     ];
     const lines = harness(agents).render();
-    expect(lines.some(l => l.includes("running one"))).toBe(true);
-    expect(lines.some(l => l.includes("queued one"))).toBe(false);
+    expect(lines.some((l) => l.includes("running one"))).toBe(true);
+    expect(lines.some((l) => l.includes("queued one"))).toBe(false);
   });
 
   it("collapses overflow into a '↓ N more' indicator", () => {
-    const agents = Array.from({ length: 8 }, (_, i) =>
-      makeRecord({ id: `a${i}`, description: `report ${i}` }));
+    const agents = Array.from({ length: 8 }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` }));
     const h = harness(agents);
     const lines = h.render(120);
     // 8 agents, cap 5 visible → "↓ 3 more"
-    expect(lines.some(l => l.includes("↓ 3 more"))).toBe(true);
+    expect(lines.some((l) => l.includes("↓ 3 more"))).toBe(true);
   });
 
   it("never emits a line wider than the terminal (guards wrap-induced flicker)", () => {
     const agents = Array.from({ length: 8 }, (_, i) =>
-      makeRecord({ id: `a${i}`, description: `a very long agent description number ${i} that keeps going` }));
+      makeRecord({ id: `a${i}`, description: `a very long agent description number ${i} that keeps going` }),
+    );
     const h = harness(agents);
     for (const w of [4, 8, 12, 20, 40, 80, 200]) {
       for (const line of h.render(w)) {
@@ -427,15 +437,14 @@ describe("FleetList rendering", () => {
   });
 
   it("windows the visible agents so the selection stays on screen", () => {
-    const agents = Array.from({ length: 8 }, (_, i) =>
-      makeRecord({ id: `a${i}`, description: `report ${i}` }));
+    const agents = Array.from({ length: 8 }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` }));
     const h = harness(agents);
     h.press(DOWN); // activate (main)
     // step down to the last agent (8 agents → roster index 8)
     for (let i = 0; i < 8; i++) h.press(DOWN);
     const lines = h.render(120);
-    expect(lines.find(l => l.includes("report 7"))).toContain("●");
-    expect(lines.some(l => l.includes("↑"))).toBe(true); // hidden-above indicator
+    expect(lines.find((l) => l.includes("report 7"))).toContain("●");
+    expect(lines.some((l) => l.includes("↑"))).toBe(true); // hidden-above indicator
   });
 });
 
@@ -445,7 +454,7 @@ describe("FleetList overlay lifecycle", () => {
     h.press(DOWN); // active, index 0 (main)
     h.press(ENTER);
     expect(h.overlayOpened()).toBe(false); // never opened an overlay
-    expect(h.render().some(l => l.includes("← for agents"))).toBe(true);
+    expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
   });
 
   it("keeps the cursor on the viewed agent after closing, even if the list reordered", async () => {
@@ -464,22 +473,22 @@ describe("FleetList overlay lifecycle", () => {
     agents.splice(0, 1);
     await h.closeOverlay();
     // Selection follows a2 ("two") to its new position, not whatever is at idx 2 now.
-    expect(h.render().find(l => l.includes("two"))).toContain("●");
-    expect(h.render().find(l => l.includes("three"))).toContain("○");
+    expect(h.render().find((l) => l.includes("two"))).toContain("●");
+    expect(h.render().find((l) => l.includes("three"))).toContain("○");
   });
 
   it("wires the viewer's steer composer to manager.steer with the agent id", () => {
     const agents = [makeRecord({ id: "live", description: "the one" })];
     const h = harness(agents);
-    h.press(DOWN);  // activate (main)
-    h.press(DOWN);  // → the agent
+    h.press(DOWN); // activate (main)
+    h.press(DOWN); // → the agent
     h.press(ENTER); // open the conversation viewer
 
     const viewer = h.overlayComponent();
     expect(viewer).toBeDefined();
-    viewer!.handleInput("\r");                       // Enter → open composer
+    viewer!.handleInput("\r"); // Enter → open composer
     for (const ch of "go left") viewer!.handleInput(ch);
-    viewer!.handleInput("\r");                       // Enter → send
+    viewer!.handleInput("\r"); // Enter → send
 
     expect(h.manager.steer).toHaveBeenCalledWith("live", "go left");
   });
@@ -492,17 +501,30 @@ describe("FleetList overlay lifecycle", () => {
     h.press(ENTER); // opens overlay
     expect(h.overlayOpened()).toBe(true);
     // The agent finishes, well past the linger window...
-    agents[0] = makeRecord({ id: "live", description: "the one", status: "completed", completedAt: Date.now() - 60_000 });
+    agents[0] = makeRecord({
+      id: "live",
+      description: "the one",
+      status: "completed",
+      completedAt: Date.now() - 60_000,
+    });
     h.fleet.onAgentFinished("live");
-    expect(h.overlayClosed()).toBe(false);                          // viewer stays open
-    expect(h.render().some(l => l.includes("the one"))).toBe(true); // and stays listed while viewed
+    expect(h.overlayClosed()).toBe(false); // viewer stays open
+    expect(h.render().some((l) => l.includes("the one"))).toBe(true); // and stays listed while viewed
   });
 
   it("lingers a finished agent in the list, then drops it after the window", () => {
     const recent = makeRecord({ id: "r", description: "recent done", status: "completed", completedAt: Date.now() });
-    expect(harness([recent]).render().some(l => l.includes("recent done"))).toBe(true);
+    expect(
+      harness([recent])
+        .render()
+        .some((l) => l.includes("recent done")),
+    ).toBe(true);
     const old = makeRecord({ id: "o", description: "old done", status: "completed", completedAt: Date.now() - 60_000 });
-    expect(harness([old]).render().some(l => l.includes("old done"))).toBe(false);
+    expect(
+      harness([old])
+        .render()
+        .some((l) => l.includes("old done")),
+    ).toBe(false);
   });
 });
 
@@ -514,14 +536,18 @@ describe("FleetList cost display", () => {
     const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
     let factory: any;
     fleet.setUICtx({
-      setWidget: (_k: string, c: any) => { factory = c; },
+      setWidget: (_k: string, c: any) => {
+        factory = c;
+      },
       onTerminalInput: () => () => {},
       getEditorText: () => "",
       notify: () => {},
       custom: (() => new Promise(() => {})) as any,
     } as any);
     fleet.update();
-    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
+    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme)
+      .render(120)
+      .join("\n");
   }
 
   it("appends the cost after the token count when enabled", () => {
@@ -543,10 +569,18 @@ describe("FleetList cost display", () => {
     // The stale shape on purpose: an activity entry carrying figures of its own
     // is what the old fallback preferred, so a row that still renders the
     // record's numbers proves the tracker is no longer consulted for spend.
-    const tracked = new Map<string, AgentActivity>([["a1", {
-      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
-      lifetimeUsage: { input: 1, output: 1, cacheWrite: 0, cost: 0.9 },
-    } as unknown as AgentActivity]]);
+    const tracked = new Map<string, AgentActivity>([
+      [
+        "a1",
+        {
+          activeTools: new Map(),
+          toolUses: 0,
+          responseText: "",
+          turnCount: 1,
+          lifetimeUsage: { input: 1, output: 1, cacheWrite: 0, cost: 0.9 },
+        } as unknown as AgentActivity,
+      ],
+    ]);
 
     expect(row(true, 0.0042, tracked)).toBe(row(true, 0.0042));
   });

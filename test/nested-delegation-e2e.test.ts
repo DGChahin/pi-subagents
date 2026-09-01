@@ -60,7 +60,11 @@ function toolResultTexts(context: Context): Array<{ name: string; text: string }
 /** Every `.output` transcript beneath a root, at any session/tasks depth. */
 function findOutputFiles(root: string): string[] {
   let entries: string[];
-  try { entries = readdirSync(root); } catch { return []; }
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
   return entries.flatMap((e) => {
     const full = join(root, e);
     if (statSync(full).isDirectory()) return findOutputFiles(full);
@@ -120,9 +124,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
           const result = [...context.messages]
             .reverse()
             .find((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent");
-          const inner = ((result?.content ?? []) as Array<{ text?: string }>)
-            .map((b) => b.text ?? "")
-            .join("");
+          const inner = ((result?.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
           // Echo the child's own text: if it never arrived, the marker is absent
           // and the top-level assertion fails rather than passing vacuously.
           return `orchestrator saw: ${inner}`;
@@ -154,7 +156,9 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       cwd,
       respond,
       live: false,
-      beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
+      beforeRun: () => {
+        registerAgents(loadCustomAgents(cwd));
+      },
     });
 
     // pi admitted the injected nested tools into the opted-in child's active set,
@@ -222,7 +226,9 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
         cwd,
         respond,
         live: false,
-        beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
+        beforeRun: () => {
+          registerAgents(loadCustomAgents(cwd));
+        },
       });
 
       // The background child ran and its output came back through the id the
@@ -230,12 +236,9 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       const orchestratorResult = run.parentSession.messages
         .filter(
           (message) =>
-            message.role === "toolResult" &&
-            (message as { toolName?: string }).toolName === "get_subagent_result",
+            message.role === "toolResult" && (message as { toolName?: string }).toolName === "get_subagent_result",
         )
-        .flatMap((message) =>
-          (message.content as Array<{ text?: string }>).map((block) => block.text ?? ""),
-        )
+        .flatMap((message) => (message.content as Array<{ text?: string }>).map((block) => block.text ?? ""))
         .join("\n");
       expect(orchestratorResult).toContain("orchestrator polled");
       expect(orchestratorResult).toContain(WORKER_MARKER);

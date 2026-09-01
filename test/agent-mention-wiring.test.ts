@@ -69,21 +69,22 @@ function fakeSession(overrides: Record<string, unknown> = {}) {
 function holdUntilAbort(session: any, opts: any) {
   return new Promise((resolve) => {
     opts.onSessionCreated?.(session);
-    const settle = () => resolve({
-      responseText: "",
-      session,
-      aborted: true,
-      steered: false,
-      failure: undefined,
-    });
+    const settle = () =>
+      resolve({
+        responseText: "",
+        session,
+        aborted: true,
+        steered: false,
+        failure: undefined,
+      });
     if (opts.signal?.aborted) settle();
     else opts.signal?.addEventListener("abort", settle, { once: true });
   }) as any;
 }
 
 function heldRun(session: any) {
-  vi.mocked(runAgent).mockImplementation(
-    (_ctx: any, _type: any, _prompt: any, opts: any) => holdUntilAbort(session, opts),
+  vi.mocked(runAgent).mockImplementation((_ctx: any, _type: any, _prompt: any, opts: any) =>
+    holdUntilAbort(session, opts),
   );
 }
 
@@ -118,13 +119,15 @@ function bootDirect(settings: Record<string, unknown> = {}) {
 }
 
 async function spawnBackground(tools: Map<string, any>, subagent_type = "Explore"): Promise<string> {
-  const r = await tools.get("Agent").execute(
-    "tc-spawn",
-    { prompt: "go", description: "find flaky tests", subagent_type, run_in_background: true },
-    undefined,
-    undefined,
-    ctx(),
-  );
+  const r = await tools
+    .get("Agent")
+    .execute(
+      "tc-spawn",
+      { prompt: "go", description: "find flaky tests", subagent_type, run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
   return /Agent ID: (\S+)/.exec(textOf(r))![1];
 }
 
@@ -150,7 +153,6 @@ describe("messaging a running agent", () => {
     expect(session.steer).toHaveBeenCalledWith("also check the RPC path");
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Sent to @explore", "info");
     expect(pi.sendMessage).not.toHaveBeenCalled();
-
   });
 
   it("un-consumes the result so the agent's reply is still relayed", async () => {
@@ -168,7 +170,6 @@ describe("messaging a running agent", () => {
     await send(lifecycle, "@explore keep going");
 
     expect(record.resultConsumed).toBe(false);
-
   });
 
   it("addresses same-type siblings by their numbered handles", async () => {
@@ -187,7 +188,6 @@ describe("messaging a running agent", () => {
 
     expect(second.steer).toHaveBeenCalledWith("you take the second half");
     expect(first.steer).not.toHaveBeenCalled();
-
   });
 });
 
@@ -210,7 +210,6 @@ describe("messaging a finished agent", () => {
     expect(result).toEqual({ action: "handled" });
     expect(resumeAgent).toHaveBeenCalledWith(session, "anything else?", expect.anything());
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Resuming @explore", "info");
-
   });
 
   it("honours the agent's output_transcript: false when resuming", async () => {
@@ -230,14 +229,13 @@ describe("messaging a finished agent", () => {
 
     const id = await spawnBackground(b.tools, "quiet");
     await flush();
-    const record = b.pi.__manager?.getRecord?.(id)
-      ?? (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
+    const record =
+      b.pi.__manager?.getRecord?.(id) ?? (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
     expect(record.outputFile).toBeUndefined(); // spawn honoured it
 
     await send(b.lifecycle, "@quiet anything else?");
 
     expect(record.outputFile).toBeUndefined();
-
   });
 
   it("does not attribute the new answer to the tool call that spawned it", async () => {
@@ -245,10 +243,7 @@ describe("messaging a finished agent", () => {
     // call's id on the record would point the orchestrator's new result at a
     // call answered runs ago.
     const { pi, lifecycle, tools } = boot();
-    await lifecycle.get("session_start")(
-      { type: "session_start" },
-      ctx({ isIdle: vi.fn(() => true) }),
-    );
+    await lifecycle.get("session_start")({ type: "session_start" }, ctx({ isIdle: vi.fn(() => true) }));
     finishedRun(fakeSession());
     vi.mocked(resumeAgent).mockResolvedValue({ text: "second answer", failure: undefined } as any);
 
@@ -257,12 +252,11 @@ describe("messaging a finished agent", () => {
     vi.mocked(pi.sendMessage).mockClear();
 
     await send(lifecycle, "@explore anything else?");
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 400));
 
     const [message] = vi.mocked(pi.sendMessage).mock.calls[0];
     expect(message.details.resultPreview).toContain("second answer");
     expect(JSON.stringify(message)).not.toContain("<tool-use-id>");
-
   });
 
   it("relays the resumed answer through the ordinary completion notification", async () => {
@@ -270,10 +264,7 @@ describe("messaging a finished agent", () => {
     // main model has to be told the answer came back, or the reply is stranded
     // in the agent's transcript.
     const { pi, lifecycle, tools } = boot();
-    await lifecycle.get("session_start")(
-      { type: "session_start" },
-      ctx({ isIdle: vi.fn(() => true) }),
-    );
+    await lifecycle.get("session_start")({ type: "session_start" }, ctx({ isIdle: vi.fn(() => true) }));
     finishedRun(fakeSession());
     vi.mocked(resumeAgent).mockResolvedValue({ text: "second answer", failure: undefined } as any);
 
@@ -282,7 +273,7 @@ describe("messaging a finished agent", () => {
     vi.mocked(pi.sendMessage).mockClear();
 
     await send(lifecycle, "@explore anything else?");
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 400));
 
     expect(pi.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -292,7 +283,6 @@ describe("messaging a finished agent", () => {
       }),
       expect.objectContaining({ triggerTurn: true }),
     );
-
   });
 });
 
@@ -327,7 +317,6 @@ describe("stacking the suggestion provider on pi's", () => {
 
     expect(first.ui.addAutocompleteProvider).toHaveBeenCalledTimes(1);
     expect(second.ui.addAutocompleteProvider).not.toHaveBeenCalled();
-
   });
 
   it("stays out of non-TUI modes, which have no editor to complete into", async () => {
@@ -337,7 +326,6 @@ describe("stacking the suggestion provider on pi's", () => {
     await lifecycle.get("session_start")({ type: "session_start" }, rpc);
 
     expect(rpc.ui.addAutocompleteProvider).not.toHaveBeenCalled();
-
   });
 
   it("hands pi a provider that answers a live handle", async () => {
@@ -354,7 +342,6 @@ describe("stacking the suggestion provider on pi's", () => {
     const result = await provider.getSuggestions(["@ex"], 0, 3, { signal: new AbortController().signal });
 
     expect(result.items.map((i: any) => i.value)).toEqual(["@explore"]);
-
   });
 });
 
@@ -372,7 +359,6 @@ describe("resolving which agent a handle means", () => {
 
     expect(await send(lifecycle, "@EXPLORE shout")).toEqual({ action: "handled" });
     expect(session.steer).toHaveBeenCalledWith("shout");
-
   });
 
   it("accepts the raw agent id, which the README offers as a fallback", async () => {
@@ -385,7 +371,6 @@ describe("resolving which agent a handle means", () => {
 
     expect(await send(lifecycle, `@${id} by id`)).toEqual({ action: "handled" });
     expect(session.steer).toHaveBeenCalledWith("by id");
-
   });
 
   it("queues the message for an agent still waiting on a concurrency slot", async () => {
@@ -404,7 +389,6 @@ describe("resolving which agent a handle means", () => {
 
     expect(await send(lifecycle, "@explore-2 wait for me")).toEqual({ action: "handled" });
     expect(queued.pendingSteers).toEqual(["wait for me"]);
-
   });
 
   it("never reaches into a nested child, and starts a top-level agent instead", async () => {
@@ -422,9 +406,7 @@ describe("resolving which agent a handle means", () => {
 
     expect(await send(lifecycle, "@explore reach into a child")).toEqual({ action: "handled" });
     expect(child.steer).not.toHaveBeenCalled();
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.anything(), "Explore", "reach into a child", expect.anything(),
-    );
+    expect(runAgent).toHaveBeenCalledWith(expect.anything(), "Explore", "reach into a child", expect.anything());
   });
 
   it("starts a fresh agent once the old record has been evicted", async () => {
@@ -447,7 +429,6 @@ describe("resolving which agent a handle means", () => {
 
     expect(resumeAgent).not.toHaveBeenCalled();
     expect(runAgent).toHaveBeenCalledWith(expect.anything(), "Explore", "start over", expect.anything());
-
   });
 });
 
@@ -463,14 +444,8 @@ describe("mentioning an agent that has never run", () => {
     );
 
     expect(result).toEqual({ action: "handled" });
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.anything(),
-      "Explore",
-      "find every retry marker",
-      expect.anything(),
-    );
+    expect(runAgent).toHaveBeenCalledWith(expect.anything(), "Explore", "find every retry marker", expect.anything());
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Started @explore", "info");
-
   });
 
   it("leaves model, thinking and max turns to the agent's own config", async () => {
@@ -485,9 +460,7 @@ describe("mentioning an agent that has never run", () => {
     expect(opts.model).toBeUndefined();
     expect(opts.thinkingLevel).toBeUndefined();
     expect(opts.maxTurns).toBeUndefined();
-
   });
-
 
   it("wires run activity callbacks for a mention spawn", async () => {
     // Mention spawns bypass the Agent tool, so the manager must still receive
@@ -508,12 +481,12 @@ describe("mentioning an agent that has never run", () => {
     heldRun(fakeSession());
 
     await send(lifecycle, "@explore go");
-    const record = (globalThis as any)[Symbol.for("pi-subagents:manager")]
-      .getRecord(vi.mocked(runAgent).mock.calls[0][3].agentId);
+    const record = (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(
+      vi.mocked(runAgent).mock.calls[0][3].agentId,
+    );
 
     expect(record.isBackground).toBe(true);
     expect(record.description).toBe("go");
-
   });
 
   it("messages the running agent rather than starting a second one", async () => {
@@ -529,7 +502,6 @@ describe("mentioning an agent that has never run", () => {
 
     expect(runAgent).not.toHaveBeenCalled();
     expect(session.steer).toHaveBeenCalledWith("actually do this instead");
-
   });
 
   it("reports a failed start instead of silently doing nothing", async () => {
@@ -539,17 +511,10 @@ describe("mentioning an agent that has never run", () => {
     });
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
-      { type: "input", text: "@explore go", source: "interactive" },
-      uiCtx,
-    );
+    const result = await lifecycle.get("input")({ type: "input", text: "@explore go", source: "interactive" }, uiCtx);
 
     expect(result).toEqual({ action: "handled" });
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Could not start @explore"),
-      "error",
-    );
-
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Could not start @explore"), "error");
   });
 });
 
@@ -614,10 +579,7 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: true });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore find the flaky test", source: "interactive" },
-      uiCtx,
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore find the flaky test", source: "interactive" }, uiCtx);
 
     // The clone's turn happens first, so the agent does not exist yet. `direct`
     // mode's "Started @explore" is the contrast: there, it does.
@@ -632,17 +594,11 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: false, error: "no session file" });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore find the flaky test", source: "interactive" },
-      uiCtx,
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore find the flaky test", source: "interactive" }, uiCtx);
     await flush();
 
     expect(runAgent).toHaveBeenCalled();
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      "Started @explore directly — no session file",
-      "warning",
-    );
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith("Started @explore directly — no session file", "warning");
   });
 
   it("reports a fallback that also fails rather than going quiet", async () => {
@@ -653,16 +609,10 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: false, error: "no session file" });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore find the flaky test", source: "interactive" },
-      uiCtx,
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore find the flaky test", source: "interactive" }, uiCtx);
     await flush();
 
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Could not start @explore"),
-      "error",
-    );
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Could not start @explore"), "error");
   });
 
   it("still steers a running agent directly, without cloning anything", async () => {
@@ -769,7 +719,6 @@ describe("input that is not a mention", () => {
 
     expect(await send(lifecycle, "@explore")).toEqual({ action: "continue" });
     expect(session.steer).not.toHaveBeenCalled();
-
   });
 
   it("leaves a leading file attachment alone", async () => {
@@ -780,7 +729,6 @@ describe("input that is not a mention", () => {
     await flush();
 
     expect(await send(lifecycle, "@src/index.ts summarize this")).toEqual({ action: "continue" });
-
   });
 
   it("ignores input the extension layer submitted", async () => {
@@ -795,7 +743,6 @@ describe("input that is not a mention", () => {
 
     expect(await send(lifecycle, "@explore relayed text", "extension")).toEqual({ action: "continue" });
     expect(session.steer).not.toHaveBeenCalled();
-
   });
 
   it("leaves a headless prompt to the main model", async () => {
@@ -814,7 +761,6 @@ describe("input that is not a mention", () => {
 
     expect(result).toEqual({ action: "continue" });
     expect(runAgent).not.toHaveBeenCalled();
-
   });
 
   it("leaves an RPC-driven prompt to the main model", async () => {
@@ -832,7 +778,6 @@ describe("input that is not a mention", () => {
 
     expect(result).toEqual({ action: "continue" });
     expect(session.steer).not.toHaveBeenCalled();
-
   });
 
   it("falls through entirely when mentions are disabled", async () => {
@@ -845,7 +790,6 @@ describe("input that is not a mention", () => {
 
     expect(await send(lifecycle, "@explore do this")).toEqual({ action: "continue" });
     expect(session.steer).not.toHaveBeenCalled();
-
   });
 
   it("disabled also blocks starting an agent, not just messaging one", async () => {
@@ -856,7 +800,6 @@ describe("input that is not a mention", () => {
 
     expect(await send(lifecycle, "@explore go")).toEqual({ action: "continue" });
     expect(runAgent).not.toHaveBeenCalled();
-
   });
 
   it("disabled also blocks resuming a finished agent", async () => {
@@ -869,7 +812,6 @@ describe("input that is not a mention", () => {
 
     expect(await send(lifecycle, "@explore anything else?")).toEqual({ action: "continue" });
     expect(resumeAgent).not.toHaveBeenCalled();
-
   });
 
   it("the suggestion popup goes quiet too, so @ means only 'attach a file'", async () => {
@@ -879,9 +821,15 @@ describe("input that is not a mention", () => {
       mode: "tui",
       hasUI: true,
       ui: {
-        setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(),
-        onTerminalInput: vi.fn(() => vi.fn()), addAutocompleteProvider: vi.fn(),
-        getToolsExpanded: vi.fn(() => true), setToolsExpanded: vi.fn(), setWorkingVisible: vi.fn(), setHiddenThinkingLabel: vi.fn(),
+        setStatus: vi.fn(),
+        setWidget: vi.fn(),
+        notify: vi.fn(),
+        onTerminalInput: vi.fn(() => vi.fn()),
+        addAutocompleteProvider: vi.fn(),
+        getToolsExpanded: vi.fn(() => true),
+        setToolsExpanded: vi.fn(),
+        setWorkingVisible: vi.fn(),
+        setHiddenThinkingLabel: vi.fn(),
       },
     });
 
@@ -894,7 +842,6 @@ describe("input that is not a mention", () => {
     const provider = factory({ getSuggestions: vi.fn().mockResolvedValue(files), applyCompletion: vi.fn() });
 
     expect(await provider.getSuggestions(["@ex"], 0, 3, { signal: new AbortController().signal })).toBe(files);
-
   });
 });
 
@@ -949,7 +896,10 @@ describe("@agent-<type> — Claude Code's manual spelling", () => {
 
     expect(result).toEqual({ action: "handled" });
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
-      expect.anything(), "Explore", "find the flaky test", expect.anything(),
+      expect.anything(),
+      "Explore",
+      "find the flaky test",
+      expect.anything(),
     );
   });
 
@@ -976,11 +926,15 @@ describe("@agent-<type> — Claude Code's manual spelling", () => {
       .mockImplementationOnce((_c: any, _t: any, _p: any, o: any) => holdUntilAbort(literal, o));
 
     await spawnBackground(tools); // plain Explore → @explore
-    await tools.get("Agent").execute(
-      "tc-named",
-      { prompt: "go", description: "named", subagent_type: "Plan", name: "agent-explore", run_in_background: true },
-      undefined, undefined, ctx(),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-named",
+        { prompt: "go", description: "named", subagent_type: "Plan", name: "agent-explore", run_in_background: true },
+        undefined,
+        undefined,
+        ctx(),
+      );
     await flush();
 
     await send(lifecycle, "@agent-explore over here");
@@ -1080,10 +1034,7 @@ describe("resuming an evicted agent by name", () => {
     await send(lifecycle, "@explore anything else?");
     await flush();
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore and one more thing", source: "interactive" },
-      uiCtx,
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore and one more thing", source: "interactive" }, uiCtx);
 
     // Steered, not resumed again — and runAgent was called exactly once.
     expect(resumed.steer).toHaveBeenCalledWith("and one more thing");
@@ -1096,8 +1047,16 @@ describe("resuming an evicted agent by name", () => {
     finishedRun(fakeSession());
     const spawned = await tools.get("Agent").execute(
       "tc-named",
-      { prompt: "audit", description: "audit the auth flow", subagent_type: "Explore", name: "auth-audit", run_in_background: true },
-      undefined, undefined, ctx(),
+      {
+        prompt: "audit",
+        description: "audit the auth flow",
+        subagent_type: "Explore",
+        name: "auth-audit",
+        run_in_background: true,
+      },
+      undefined,
+      undefined,
+      ctx(),
     );
     await flush();
     await evict(/Agent ID: (\S+)/.exec(textOf(spawned))![1]);
@@ -1137,14 +1096,12 @@ describe("resuming an evicted agent by name", () => {
     );
 
     const uiCtx = ctx();
-    await b.lifecycle.get("input")(
-      { type: "input", text: "@scout anything else?", source: "interactive" },
-      uiCtx,
-    );
+    await b.lifecycle.get("input")({ type: "input", text: "@scout anything else?", source: "interactive" }, uiCtx);
 
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
     expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      "Could not resume @scout — the scout agent is no longer available.", "warning",
+      "Could not resume @scout — the scout agent is no longer available.",
+      "warning",
     );
   });
 
@@ -1175,7 +1132,9 @@ describe("resuming an evicted agent by name", () => {
     await flush();
 
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
-      expect.anything(), "scout", "hi again",
+      expect.anything(),
+      "scout",
+      "hi again",
       expect.objectContaining({ resumeSessionFile: sessionPath() }),
     );
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Resuming @scout", "info");
@@ -1193,17 +1152,13 @@ describe("resuming an evicted agent by name", () => {
     vi.mocked(runAgent).mockClear();
     // Stands in for any spawn-time throw: startAgent calls runAgent inline, so
     // a synchronous throw propagates back out of spawn().
-    vi.mocked(runAgent).mockImplementationOnce(() => { throw new Error("Unknown agent type"); });
+    vi.mocked(runAgent).mockImplementationOnce(() => {
+      throw new Error("Unknown agent type");
+    });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore anything else?", source: "interactive" },
-      uiCtx,
-    );
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Could not resume @explore"),
-      "warning",
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore anything else?", source: "interactive" }, uiCtx);
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Could not resume @explore"), "warning");
 
     // Still reachable: try again and it reopens the same conversation.
     heldRun(fakeSession());
@@ -1211,7 +1166,9 @@ describe("resuming an evicted agent by name", () => {
     await flush();
 
     expect(vi.mocked(runAgent)).toHaveBeenLastCalledWith(
-      expect.anything(), "Explore", "try again",
+      expect.anything(),
+      "Explore",
+      "try again",
       expect.objectContaining({ resumeSessionFile: sessionPath() }),
     );
   });
@@ -1244,12 +1201,12 @@ describe("resuming an evicted agent by name", () => {
     await evict(await spawnBackground(tools));
     await flush();
 
-    const steered = await tools.get("steer_subagent").execute(
-      "tc", { agent_id: "explore", message: "hi" }, undefined, undefined, ctx(),
-    );
-    const read = await tools.get("get_subagent_result").execute(
-      "tc", { agent_id: "explore" }, undefined, undefined, ctx(),
-    );
+    const steered = await tools
+      .get("steer_subagent")
+      .execute("tc", { agent_id: "explore", message: "hi" }, undefined, undefined, ctx());
+    const read = await tools
+      .get("get_subagent_result")
+      .execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
 
     expect(textOf(steered)).toContain("Agent not found");
     expect(textOf(read)).toContain("Agent not found");
@@ -1274,9 +1231,7 @@ describe("resuming an evicted agent by name", () => {
 
     expect(result).toEqual({ action: "handled" });
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-    expect(uiCtx.ui.notify).toHaveBeenCalledWith(
-      "Could not resume @explore — its session is gone.", "warning",
-    );
+    expect(uiCtx.ui.notify).toHaveBeenCalledWith("Could not resume @explore — its session is gone.", "warning");
   });
 
   it("forgets an unopenable session so the next mention starts fresh", async () => {
@@ -1292,14 +1247,13 @@ describe("resuming an evicted agent by name", () => {
     heldRun(fakeSession());
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
-      { type: "input", text: "@explore start over", source: "interactive" },
-      uiCtx,
-    );
+    await lifecycle.get("input")({ type: "input", text: "@explore start over", source: "interactive" }, uiCtx);
     await flush();
 
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
-      expect.anything(), "Explore", "start over",
+      expect.anything(),
+      "Explore",
+      "start over",
       expect.not.objectContaining({ resumeSessionFile: expect.anything() }),
     );
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Started @explore", "info");
@@ -1317,9 +1271,9 @@ describe("handles as tool arguments", () => {
     await spawnBackground(tools);
     await flush();
 
-    const r = await tools.get("steer_subagent").execute(
-      "tc", { agent_id: "explore", message: "look at the RPC path" }, undefined, undefined, ctx(),
-    );
+    const r = await tools
+      .get("steer_subagent")
+      .execute("tc", { agent_id: "explore", message: "look at the RPC path" }, undefined, undefined, ctx());
 
     expect(session.steer).toHaveBeenCalledWith("look at the RPC path");
     expect(textOf(r)).not.toContain("Agent not found");
@@ -1329,16 +1283,20 @@ describe("handles as tool arguments", () => {
     const { tools } = boot();
     const session = fakeSession();
     heldRun(session);
-    await tools.get("Agent").execute(
-      "tc-named",
-      { prompt: "go", description: "audit", subagent_type: "Explore", name: "auth-audit", run_in_background: true },
-      undefined, undefined, ctx(),
-    );
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-named",
+        { prompt: "go", description: "audit", subagent_type: "Explore", name: "auth-audit", run_in_background: true },
+        undefined,
+        undefined,
+        ctx(),
+      );
     await flush();
 
-    await tools.get("steer_subagent").execute(
-      "tc", { agent_id: "auth-audit", message: "keep going" }, undefined, undefined, ctx(),
-    );
+    await tools
+      .get("steer_subagent")
+      .execute("tc", { agent_id: "auth-audit", message: "keep going" }, undefined, undefined, ctx());
 
     expect(session.steer).toHaveBeenCalledWith("keep going");
   });
@@ -1349,9 +1307,9 @@ describe("handles as tool arguments", () => {
     await spawnBackground(tools);
     await flush();
 
-    const r = await tools.get("get_subagent_result").execute(
-      "tc", { agent_id: "explore" }, undefined, undefined, ctx(),
-    );
+    const r = await tools
+      .get("get_subagent_result")
+      .execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
 
     expect(textOf(r)).toContain("first answer");
   });
@@ -1359,9 +1317,9 @@ describe("handles as tool arguments", () => {
   it("still reports an unknown reference as not found", async () => {
     const { tools } = boot();
 
-    const r = await tools.get("steer_subagent").execute(
-      "tc", { agent_id: "nosuchagent", message: "hi" }, undefined, undefined, ctx(),
-    );
+    const r = await tools
+      .get("steer_subagent")
+      .execute("tc", { agent_id: "nosuchagent", message: "hi" }, undefined, undefined, ctx());
 
     expect(textOf(r)).toContain("Agent not found");
   });

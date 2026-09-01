@@ -77,19 +77,19 @@ function ctx(hasUI = false, setWidget = vi.fn()) {
   } as any;
 }
 
-const readyEmits = (pi: any): unknown[] =>
-  pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:ready");
+const readyEmits = (pi: any): unknown[] => pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:ready");
 const onCallsFor = (pi: any, channel: string): unknown[] =>
   pi.events.on.mock.calls.filter((c: any[]) => c[0] === channel);
 
 function runUntilAborted(_ctx: any, _type: any, _prompt: any, options: any) {
   return new Promise((resolve) => {
-    const finish = () => resolve({
-      responseText: "",
-      session: { dispose: vi.fn() },
-      aborted: true,
-      steered: false,
-    });
+    const finish = () =>
+      resolve({
+        responseText: "",
+        session: { dispose: vi.fn() },
+        aborted: true,
+        steered: false,
+      });
     if (options.signal?.aborted) finish();
     else options.signal?.addEventListener("abort", finish, { once: true });
   }) as any;
@@ -164,17 +164,13 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
       options: { description: "rpc gating test" },
     });
 
-    const reply = pi.events.emit.mock.calls.find(
-      (c: any[]) => c[0] === `subagents:rpc:spawn:reply:${requestId}`,
-    );
+    const reply = pi.events.emit.mock.calls.find((c: any[]) => c[0] === `subagents:rpc:spawn:reply:${requestId}`);
     expect(reply, "spawn emitted a reply").toBeTruthy();
     expect(reply![1].success, `spawn succeeded, got: ${JSON.stringify(reply![1])}`).toBe(true);
     expect(reply![1].data.id).toBeTruthy();
 
     await lifecycle.get("session_shutdown")?.();
   });
-
-
 
   it("is idempotent — a second session_start does not re-advertise or double-register", async () => {
     const { pi, lifecycle } = makePi();

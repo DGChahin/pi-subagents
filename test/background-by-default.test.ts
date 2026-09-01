@@ -87,13 +87,15 @@ const settled = (text: string) =>
   } as any);
 
 function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
-  return tools.get("Agent").execute(
-    "tc",
-    { prompt: "go", description: "d", subagent_type: "general-purpose", ...params },
-    undefined,
-    undefined,
-    ctx(),
-  );
+  return tools
+    .get("Agent")
+    .execute(
+      "tc",
+      { prompt: "go", description: "d", subagent_type: "general-purpose", ...params },
+      undefined,
+      undefined,
+      ctx(),
+    );
 }
 
 let hermetic: Hermetic | undefined;
@@ -123,13 +125,11 @@ describe("backgroundByDefault", () => {
     expect(out).not.toContain("THE-PAYLOAD");
 
     await waitForSettled(started.details.agentId);
-    const retrieved = textOf(await tools.get("get_subagent_result").execute(
-      "tc-result",
-      { agent_id: started.details.agentId, wait: true },
-      undefined,
-      undefined,
-      ctx(),
-    ));
+    const retrieved = textOf(
+      await tools
+        .get("get_subagent_result")
+        .execute("tc-result", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx()),
+    );
     expect(retrieved).toContain("THE-PAYLOAD");
   });
 

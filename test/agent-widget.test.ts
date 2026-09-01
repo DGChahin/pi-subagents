@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  describeActivity,
-  fgPreservingNestedStyles,
-  formatCost,
-  formatSessionTokens,
-} from "../src/ui/agent-widget.js";
+import { describeActivity, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
 const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };
 const ansiTheme = {
@@ -41,7 +36,14 @@ describe("shared activity helpers", () => {
 
   it("describes active tools and falls back to thinking", () => {
     expect(describeActivity(new Map([["read-1", "read"]]))).toBe("reading…");
-    expect(describeActivity(new Map([["search-1", "grep"], ["search-2", "grep"]]))).toBe("searching 2 patterns…");
+    expect(
+      describeActivity(
+        new Map([
+          ["search-1", "grep"],
+          ["search-2", "grep"],
+        ]),
+      ),
+    ).toBe("searching 2 patterns…");
     expect(describeActivity(new Map(), "   ")).toBe("thinking…");
   });
 });

@@ -49,13 +49,15 @@ async function scheduleAndReadBack(
   await lifecycle.get("session_start")?.({}, c);
 
   const reply = textOf(
-    await tools.get("Agent").execute(
-      "tc-sched",
-      { prompt: "do the thing", description: "nightly sweep", schedule: "0 3 * * * *", ...params },
-      undefined,
-      undefined,
-      c,
-    ),
+    await tools
+      .get("Agent")
+      .execute(
+        "tc-sched",
+        { prompt: "do the thing", description: "nightly sweep", schedule: "0 3 * * * *", ...params },
+        undefined,
+        undefined,
+        c,
+      ),
   );
 
   const store = new ScheduleStore(resolveStorePath(c.cwd, SESSION_ID));
@@ -161,7 +163,9 @@ describe("Agent tool → schedule restrictions", () => {
     let jobCount = 0;
     try {
       jobCount = new ScheduleStore(resolveStorePath(c.cwd, SESSION_ID)).list().length;
-    } catch { /* store never created — nothing was scheduled */ }
+    } catch {
+      /* store never created — nothing was scheduled */
+    }
     await lifecycle.get("session_shutdown")?.();
     return { reply, jobCount, restore: hermetic.restore };
   }
@@ -221,9 +225,7 @@ describe("Agent tool → schedule restrictions", () => {
   it("refuses scheduling entirely when the project disabled it", async () => {
     const { reply, jobCount, restore } = await scheduleCall({}, { schedulingEnabled: false });
     try {
-      expect(reply).toBe(
-        "Scheduling is disabled in this project. Enable via /agents → Settings → Scheduling.",
-      );
+      expect(reply).toBe("Scheduling is disabled in this project. Enable via /agents → Settings → Scheduling.");
       expect(jobCount).toBe(0);
     } finally {
       restore();

@@ -86,7 +86,12 @@ async function spawnCompletedBackgroundAgent(tools: Map<string, any>): Promise<s
   });
   const spawn = await tools.get("Agent").execute(
     "tc-spawn",
-    { prompt: "go", description: "Review monero_en.rs in depth", subagent_type: "general-purpose", run_in_background: true },
+    {
+      prompt: "go",
+      description: "Review monero_en.rs in depth",
+      subagent_type: "general-purpose",
+      run_in_background: true,
+    },
     undefined,
     undefined,
     ctx(),
@@ -138,7 +143,9 @@ describe("issue #108: unread completed background agents survive session events"
     // The exact #108 trigger: a session switch fires before the LLM read the result.
     await lifecycle.get("session_before_switch")?.();
 
-    const res = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+    const res = await tools
+      .get("get_subagent_result")
+      .execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
     const out = textOf(res);
     expect(out).not.toContain("Agent not found");
     expect(out).toContain("THE-RESULT-PAYLOAD");
@@ -153,7 +160,9 @@ describe("issue #108: unread completed background agents survive session events"
 
     await lifecycle.get("session_start")?.({}, ctx());
 
-    const res = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+    const res = await tools
+      .get("get_subagent_result")
+      .execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
     const out = textOf(res);
     expect(out).not.toContain("Agent not found");
     expect(out).toContain("THE-RESULT-PAYLOAD");
@@ -167,13 +176,17 @@ describe("issue #108: unread completed background agents survive session events"
     const id = await spawnCompletedBackgroundAgent(tools);
 
     // LLM reads the result → resultConsumed=true.
-    const first = await tools.get("get_subagent_result").execute("tc-read1", { agent_id: id }, undefined, undefined, ctx());
+    const first = await tools
+      .get("get_subagent_result")
+      .execute("tc-read1", { agent_id: id }, undefined, undefined, ctx());
     expect(textOf(first)).toContain("THE-RESULT-PAYLOAD");
 
     // Now a session switch SHOULD clean it up (consumed records are not preserved).
     await lifecycle.get("session_before_switch")?.();
 
-    const second = await tools.get("get_subagent_result").execute("tc-read2", { agent_id: id }, undefined, undefined, ctx());
+    const second = await tools
+      .get("get_subagent_result")
+      .execute("tc-read2", { agent_id: id }, undefined, undefined, ctx());
     expect(textOf(second)).toContain("Agent not found");
 
     await lifecycle.get("session_shutdown")?.({}, ctx());

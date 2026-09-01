@@ -71,10 +71,7 @@ function formatDetails(j: ScheduledSubagent, scheduler: SubagentScheduler): stri
  * List scheduled jobs; selecting one opens a cancel-confirm with details.
  * Returns when the user backs out or after a cancellation.
  */
-export async function showSchedulesMenu(
-  ctx: ExtensionCommandContext,
-  scheduler: SubagentScheduler,
-): Promise<void> {
+export async function showSchedulesMenu(ctx: ExtensionCommandContext, scheduler: SubagentScheduler): Promise<void> {
   if (!scheduler.isActive()) {
     ctx.ui.notify("Scheduler is not active in this session.", "warning");
     return;
@@ -89,11 +86,8 @@ export async function showSchedulesMenu(
   // Numbered + item-paired: two jobs whose names agree in the first 18
   // characters format identically, and matching the returned string back
   // against a parallel label array cancelled whichever came first.
-  const job = await selectItem(
-    ctx.ui,
-    `Scheduled jobs (${jobs.length}) — select to cancel`,
-    jobs,
-    j => formatJob(j, scheduler),
+  const job = await selectItem(ctx.ui, `Scheduled jobs (${jobs.length}) — select to cancel`, jobs, (j) =>
+    formatJob(j, scheduler),
   );
   if (!job) return;
 
